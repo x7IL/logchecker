@@ -48,10 +48,26 @@ def export_to_excel(attacks, file_name):
     # Populate the Excel sheet with attack data.
     for ip, data in attacks.items():
         start, end, success, fail = min(data['start']), max(data['end']), data['success'], data['fail']
-        ratio = 'N/A' if fail == 0 and success == 0 else 'Inf' if fail == 0 else success / fail
-        row = [ip, start.strftime('%Y-%m-%d %H:%M:%S'), end.strftime('%Y-%m-%d %H:%M:%S'),
-               success, fail, success + fail, ratio, ', '.join(data['users']),
-               'Yes' if ratio != 'N/A' and ratio < 1 else 'No']
+        total_attempts = success + fail
+
+        # Calculate ratio, handling different cases for zero failures.
+        if fail == 0 and success == 0:
+            ratio = 'N/A'
+        elif fail == 0:
+            ratio = 'Inf'
+        else:
+            ratio = success / fail
+
+        # Check if ratio is numeric and less than 1 for marking as malicious.
+        is_malicious = 'Yes' if isinstance(ratio, float) and ratio < 1 else 'No'
+
+        # Compile row data for Excel.
+        row = [
+            ip, start.strftime('%Y-%m-%d %H:%M:%S'), end.strftime('%Y-%m-%d %H:%M:%S'),
+            success, fail, total_attempts, ratio, ', '.join(data['users']),
+            is_malicious
+        ]
+
         ws.append(row)
 
     # Create, style, and append a table in the Excel sheet.

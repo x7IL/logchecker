@@ -1,0 +1,13 @@
+- [x] **Parse log file** - Extract IP addresses, dates, and usernames from the authentication log.
+- [x] **Aggregate attack data** - Organize attack data by IP, including attack times and outcomes.
+- [x] **Display user information** - List impacted users for each IP address.
+- [x] **Show failed and successful attempts** - Include counts of failed and successful authentication attempts.
+- [x] **Calculate success/failure ratio** - Determine the ratio of successful to failed attempts for each IP.
+- [x] **Mark malicious activity** - Identify and flag potential malicious activity based on the success/failure ratio.
+- [ ] **IP to hostname resolution** - Convert IP addresses to more readable hostnames.
+- [ ] **Geolocate IP addresses** - Add geographical location information for each IP address.
+- [ ] **Temporal analysis** - Analyze and highlight patterns based on the timing of attacks.
+- [ ] **Include visualizations** - Create graphs to represent the data visually within the Excel report.
+- [ ] **Pattern detection** - Identify common attack patterns or behaviors.
+- [ ] **Executive summary** - Provide a summary section with key insights and statistics.
+- [ ] **Documentation** - Create a guide or documentation explaining how to use the tool and interpret its outputs.

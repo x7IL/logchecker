@@ -1,11 +1,11 @@
 import re
 from datetime import datetime
 import requests
+import sys  # Import sys module for accessing command line arguments
 
 from openpyxl import Workbook
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
-
 
 def is_local_ip(ip_address):
     # Define local IP address ranges
@@ -125,7 +125,11 @@ def export_to_excel(attacks, file_name):
 
     wb.save(filename=file_name)  # Save the Excel workbook.
 
-# Parse log, export data to Excel, and print completion message.
-attacks_data = parse_auth_log('auth.log')
-export_to_excel(attacks_data, 'attacks_report.xlsx')
-print('Report saved to attacks_report.xlsx.')
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python3 fichier.py nom_fichier")
+        sys.exit(1)
+    log_file = sys.argv[1]
+    attacks_data = parse_auth_log(log_file)
+    export_to_excel(attacks_data, 'attacks_report.xlsx')
+    print('Report saved to attacks_report.xlsx.')

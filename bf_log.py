@@ -8,23 +8,28 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 
 def is_local_ip(ip_address):
+    """Check if an IP address is within the local network ranges."""
+    # Define local IP address ranges
     local_networks = [
         ('10.0.0.0', '10.255.255.255'),
         ('172.16.0.0', '172.31.255.255'),
         ('192.168.0.0', '192.168.255.255')
     ]
+    # Convert IP addresses to integers for comparison
     ip_int = ip_to_int(ip_address)
+    # Check if the IP address falls within any of the local ranges
     for start, end in local_networks:
         if ip_int >= ip_to_int(start) and ip_int <= ip_to_int(end):
             return True
     return False
 
 def ip_to_int(ip):
+    """Convert an IP address from string format to an integer."""
     parts = ip.split('.')
     return int(parts[0]) << 24 | int(parts[1]) << 16 | int(parts[2]) << 8 | int(parts[3])
 
-
 def get_domain_names(ip_address):
+    """Retrieve the domain names for a given IP address, excluding local IPs."""
     if is_local_ip(ip_address):
         return None  # Return None for local IP addresses
     try:
@@ -35,8 +40,8 @@ def get_domain_names(ip_address):
     except socket.herror:
         return None
 
-    
 def geolocate_ip(ip_address):
+    """Geolocate a given IP address using the ipinfo.io API."""
     if is_local_ip(ip_address):
         return {
             'ip': ip_address,
@@ -65,14 +70,17 @@ def geolocate_ip(ip_address):
             }
 
 def parse_auth_log(log_file):
+    """Parse an authentication log to aggregate data by IP with attack details."""
     attacks = {}
 
     with open(log_file, 'r') as file:
         for line in file:
+            # Extract IP, date, and username from each log entry.
             ip_match = re.search(r'from (\d+\.\d+\.\d+\.\d+)', line)
             date_match = re.search(r'^\w{3} \d{1,2} \d{2}:\d{2}:\d{2}', line)
             user_match = re.search(r'for (\w+) from', line)
 
+            # Aggregate and update attack data if relevant matches are found.
             if ip_match and date_match:
                 ip = ip_match.group(1)
                 date_time = datetime.strptime(date_match.group(0), '%b %d %H:%M:%S')
@@ -92,39 +100,33 @@ def parse_auth_log(log_file):
     return attacks
 
 def export_to_excel(attacks, file_name):
+    """Export aggregated attack data to an Excel file with detailed analysis."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Attack Report"
 
+    # Define and append headers to the Excel sheet.
     headers = ["IP Address", "Domain Name", "Country", "Region", "City", "Start Time", "End Time", "Successful Attempts",
                "Failed Attempts", "Total Attempts", "Success/Failure Ratio", "Impacted Users", "Malicious"]
     ws.append(headers)
 
+    # Populate the Excel sheet with attack data.
     for ip, data in attacks.items():
-        start, end, success, fail = min(data['start']), max(data['end']), data['success'], data['fail']
-        total_attempts = success + fail
-
-        if fail == 0 and success == 0:
-            ratio = 'N/A'
-        elif fail == 0:
-            ratio = 'Inf'
-        else:
-            ratio = success / fail
-
-        is_malicious = 'Yes' if isinstance(ratio, float) and ratio < 1 else 'No'
-
         domain_name = get_domain_names(ip)
         geo_info = geolocate_ip(ip)
 
         row = [
             ip, domain_name, geo_info.get('country'), geo_info.get('region'), geo_info.get('city'),
-            start.strftime('%Y-%m-%d %H:%M:%S'), end.strftime('%Y-%m-%d %H:%M:%S'),
-            success, fail, total_attempts, ratio, ', '.join(data['users']),
-            is_malicious
+            min(data['start']).strftime('%Y-%m-%d %H:%M:%S'), max(data['end']).strftime('%Y-%m-%d %H:%M:%S'),
+            data['success'], data['fail'], data['success'] + data['fail'],
+            'Inf' if data['fail'] == 0 and data['success'] > 0 else data['success'] / data['fail'] if data['fail'] != 0 else 'N/A',
+            ', '.join(data['users']),
+            'Yes' if isinstance(data['success'] / data['fail'] if data['fail'] != 0 else 0, float) and (data['success'] / data['fail'] if data['fail'] != 0 else 0) < 1 else 'No'
         ]
 
         ws.append(row)
 
+    # Add a table with style for better readability.
     table_ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
     tab = Table(displayName="AttackReportTable", ref=table_ref)
     style = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True, showColumnStripes=True)
@@ -134,6 +136,7 @@ def export_to_excel(attacks, file_name):
     wb.save(filename=file_name)
 
 if __name__ == "__main__":
+    # Main execution: Process log file and export results to an Excel report.
     if len(sys.argv) != 2:
         print("Usage: python3 file.py file_name")
         sys.exit(1)

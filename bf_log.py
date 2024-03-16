@@ -1,19 +1,23 @@
 import re
 import sys
-import socket
-import requests
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
+import aiohttp
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 
-# Global cache dictionaries for storing domain names and geolocation data
+# Caches for domain names and geolocation information to avoid redundant network requests
 domain_name_cache = {}
 geolocation_cache = {}
 
 def is_local_ip(ip_address):
-    """Check if an IP address is within the local network ranges."""
+    """
+    Determine if an IP address is within private network ranges.
+
+    :param ip_address: IP address to check.
+    :return: True if the IP is local, False otherwise.
+    """
     local_networks = [
         ('10.0.0.0', '10.255.255.255'),
         ('172.16.0.0', '172.31.255.255'),
@@ -26,65 +30,68 @@ def is_local_ip(ip_address):
     return False
 
 def ip_to_int(ip):
-    """Convert an IP address from string format to an integer."""
+    """
+    Convert an IP address from string format to an integer for easier comparison.
+
+    :param ip: IP address in string format.
+    :return: Integer representation of the IP.
+    """
     parts = ip.split('.')
     return int(parts[0]) << 24 | int(parts[1]) << 16 | int(parts[2]) << 8 | int(parts[3])
 
-def get_domain_names(ip_address):
-    """Retrieve the domain names for a given IP address, caching the results."""
-    if ip_address in domain_name_cache:
-        return domain_name_cache[ip_address]
-    if is_local_ip(ip_address):
-        domain_name_cache[ip_address] = None
-        return None
-    try:
-        host_info = socket.gethostbyaddr(ip_address)
-        domain_names = [host_info[0]] + host_info[1]
-        domain_name_cache[ip_address] = ','.join(domain_names)
-        return domain_name_cache[ip_address]
-    except socket.herror:
-        domain_name_cache[ip_address] = None
-        return None
+async def get_domain_name(ip_address):
+    """
+    Asynchronously retrieve the domain name associated with an IP address.
 
-def geolocate_ip(ip_address):
-    """Geolocate a given IP address using the ipinfo.io API, caching the results."""
-    if ip_address in geolocation_cache:
-        return geolocation_cache[ip_address]
-    if is_local_ip(ip_address):
-        geolocation_cache[ip_address] = {'ip': ip_address, 'message': 'Local IP address. Geolocation not available.'}
-        return geolocation_cache[ip_address]
+    :param ip_address: IP address to resolve.
+    """
+    if ip_address in domain_name_cache or is_local_ip(ip_address):
+        return
+    try:
+        info = await asyncio.get_event_loop().getaddrinfo(ip_address, None)
+        domain_name_cache[ip_address] = info[0][4][0]
+    except Exception:
+        domain_name_cache[ip_address] = None
+
+async def geolocate_ip(ip_address, session):
+    """
+    Asynchronously geolocate an IP address using an external API.
+
+    :param ip_address: IP address to geolocate.
+    :param session: The aiohttp session used for making HTTP requests.
+    """
+    if ip_address in geolocation_cache or is_local_ip(ip_address):
+        return
     try:
         url = f'https://ipinfo.io/{ip_address}/json'
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        geolocation_cache[ip_address] = {
-            'ip': ip_address,
-            'country': data.get('country'),
-            'region': data.get('region'),
-            'city': data.get('city'),
-        }
-        return geolocation_cache[ip_address]
-    except requests.Timeout:
-        geolocation_cache[ip_address] = {
-            'ip': ip_address,
-            'message': 'Request timed out. Geolocation not available.'
-        }
-        return geolocation_cache[ip_address]
+        async with session.get(url, timeout=5) as response:
+            data = await response.json()
+            geolocation_cache[ip_address] = {
+                'ip': ip_address,
+                'country': data.get('country', 'N/A'),
+                'region': data.get('region', 'N/A'),
+                'city': data.get('city', 'N/A'),
+            }
     except Exception as e:
-        geolocation_cache[ip_address] = {
-            'ip': ip_address,
-            'message': 'Error occurred during geolocation: ' + str(e)
-        }
-        return geolocation_cache[ip_address]
+        geolocation_cache[ip_address] = {'ip': ip_address, 'message': f'Error: {str(e)}'}
 
-def resolve_data(ip_addresses):
-    """Concurrently resolve domain names and geolocation data for a set of IP addresses."""
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        executor.map(get_domain_names, ip_addresses)
-        executor.map(geolocate_ip, ip_addresses)
+async def resolve_addresses(ip_addresses):
+    """
+    Concurrently resolve domain names and geolocations for a set of IP addresses.
+
+    :param ip_addresses: A collection of IP addresses to resolve.
+    """
+    async with aiohttp.ClientSession() as session:
+        tasks = [get_domain_name(ip) for ip in ip_addresses] + [geolocate_ip(ip, session) for ip in ip_addresses]
+        await asyncio.gather(*tasks)
 
 def parse_auth_log(log_file):
-    """Parse an authentication log to aggregate data by IP with attack details."""
+    """
+    Parse an authentication log file to extract and aggregate attack information by IP address.
+
+    :param log_file: Path to the log file.
+    :return: A dictionary with aggregated attack data.
+    """
     attacks = {}
 
     with open(log_file, 'r') as file:
@@ -112,30 +119,36 @@ def parse_auth_log(log_file):
     return attacks
 
 def export_to_excel(attacks, file_name):
-    """Export aggregated attack data to an Excel file with detailed analysis."""
+    """
+    Export the aggregated attack data to an Excel file for analysis.
+
+    :param attacks: Aggregated attack data to export.
+    :param file_name: Name of the resulting Excel file.
+    """
     wb = Workbook()
     ws = wb.active
     ws.title = "Attack Report"
+
     headers = ["IP Address", "Domain Name", "Country", "Region", "City", "Start Time", "End Time", "Successful Attempts",
                "Failed Attempts", "Total Attempts", "Success/Failure Ratio", "Impacted Users", "Malicious"]
     ws.append(headers)
 
-    # Resolve all data before exporting
-    resolve_data(attacks.keys())
-
     for ip, data in attacks.items():
-        domain_name = get_domain_names(ip)
-        geo_info = geolocate_ip(ip)
+        domain_name = domain_name_cache.get(ip, 'N/A')
+        geo_info = geolocation_cache.get(ip, {'country': 'N/A', 'region': 'N/A', 'city': 'N/A'})
+
+        success_attempts = data['success']
+        failed_attempts = data['fail']
+        total_attempts = success_attempts + failed_attempts
+        success_failure_ratio = 'Inf' if failed_attempts == 0 and success_attempts > 0 else round(success_attempts / failed_attempts, 2) if failed_attempts != 0 else 'N/A'
 
         row = [
-            ip, domain_name, geo_info.get('country'), geo_info.get('region'), geo_info.get('city'),
+            ip, domain_name, geo_info['country'], geo_info['region'], geo_info['city'],
             min(data['start']).strftime('%Y-%m-%d %H:%M:%S'), max(data['end']).strftime('%Y-%m-%d %H:%M:%S'),
-            data['success'], data['fail'], data['success'] + data['fail'],
-            'Inf' if data['fail'] == 0 and data['success'] > 0 else round(data['success'] / data['fail'], 2) if data['fail'] != 0 else 'N/A',
-            ', '.join(data['users']),
-            'Yes' if isinstance(data['success'] / data['fail'] if data['fail'] != 0 else 0, float) and (data['success'] / data['fail'] if data['fail'] != 0 else 0) < 1 else 'No'
+            success_attempts, failed_attempts, total_attempts,
+            success_failure_ratio, ', '.join(data['users']),
+            'Yes' if success_attempts > 0 and (success_failure_ratio < 1 if isinstance(success_failure_ratio, float) else False) else 'No'
         ]
-
         ws.append(row)
 
     table_ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
@@ -147,10 +160,16 @@ def export_to_excel(attacks, file_name):
     wb.save(filename=file_name)
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python3 file.py file_name")
+    if len(sys.argv) < 2:
+        print("Usage: python3 script.py log_file")
         sys.exit(1)
+
     log_file = sys.argv[1]
     attacks_data = parse_auth_log(log_file)
+
+    # Resolve IP addresses before exporting to Excel
+    ip_addresses = list(attacks_data.keys())
+    asyncio.run(resolve_addresses(ip_addresses))
+
     export_to_excel(attacks_data, 'attacks_report.xlsx')
     print('Report saved to attacks_report.xlsx.')

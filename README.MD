@@ -1,7 +1,7 @@
 # Install lib
 
 ```
-cd PARSE_LOG
+cd logchecker
 python3 -m venv .
 source bin/activate
 ```

@@ -7,44 +7,24 @@ from openpyxl import Workbook
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 
-# Caches for domain names and geolocation information to avoid redundant network requests
+# Caches for domain names and geolocation information
 domain_name_cache = {}
 geolocation_cache = {}
 
 def is_local_ip(ip_address):
-    """
-    Determine if an IP address is within private network ranges.
-
-    :param ip_address: IP address to check.
-    :return: True if the IP is local, False otherwise.
-    """
     local_networks = [
         ('10.0.0.0', '10.255.255.255'),
         ('172.16.0.0', '172.31.255.255'),
         ('192.168.0.0', '192.168.255.255'),
     ]
     ip_int = ip_to_int(ip_address)
-    for start, end in local_networks:
-        if ip_int >= ip_to_int(start) and ip_int <= ip_to_int(end):
-            return True
-    return False
+    return any(ip_int >= ip_to_int(start) and ip_int <= ip_to_int(end) for start, end in local_networks)
 
 def ip_to_int(ip):
-    """
-    Convert an IP address from string format to an integer for easier comparison.
-
-    :param ip: IP address in string format.
-    :return: Integer representation of the IP.
-    """
     parts = ip.split('.')
-    return int(parts[0]) << 24 | int(parts[1]) << 16 | int(parts[2]) << 8 | int(parts[3])
+    return (int(parts[0]) << 24) | (int(parts[1]) << 16) | (int(parts[2]) << 8) | int(parts[3])
 
 async def get_domain_name(ip_address):
-    """
-    Asynchronously retrieve the domain name associated with an IP address.
-
-    :param ip_address: IP address to resolve.
-    """
     if ip_address in domain_name_cache or is_local_ip(ip_address):
         return
     try:
@@ -54,67 +34,54 @@ async def get_domain_name(ip_address):
         domain_name_cache[ip_address] = None
 
 async def geolocate_ip(ip_address, session):
-    """
-    Asynchronously geolocate an IP address using an external API.
-
-    :param ip_address: IP address to geolocate.
-    :param session: The aiohttp session used for making HTTP requests.
-    """
     if ip_address in geolocation_cache or is_local_ip(ip_address):
         return
     try:
-        url = f'https://ipinfo.io/{ip_address}/json'
-        async with session.get(url, timeout=5) as response:
+        async with session.get(f'https://ipinfo.io/{ip_address}/json', timeout=5) as response:
             data = await response.json()
-            geolocation_cache[ip_address] = {
-                'ip': ip_address,
-                'country': data.get('country', 'N/A'),
-                'region': data.get('region', 'N/A'),
-                'city': data.get('city', 'N/A'),
-            }
+            geolocation_cache[ip_address] = data
     except Exception as e:
-        geolocation_cache[ip_address] = {'ip': ip_address, 'message': f'Error: {str(e)}'}
+        geolocation_cache[ip_address] = {'error': str(e)}
 
 async def resolve_addresses(ip_addresses):
-    """
-    Concurrently resolve domain names and geolocations for a set of IP addresses.
-
-    :param ip_addresses: A collection of IP addresses to resolve.
-    """
     async with aiohttp.ClientSession() as session:
         tasks = [get_domain_name(ip) for ip in ip_addresses] + [geolocate_ip(ip, session) for ip in ip_addresses]
         await asyncio.gather(*tasks)
 
 def parse_auth_log(log_file):
-    """
-    Parse an authentication log file to extract and aggregate attack information by IP address.
-
-    :param log_file: Path to the log file.
-    :return: A dictionary with aggregated attack data.
-    """
     attacks = {}
-
     with open(log_file, 'r') as file:
         for line in file:
             ip_match = re.search(r'from (\d+\.\d+\.\d+\.\d+)', line)
+            port_match = re.search(r'port (\d+)', line)
             date_match = re.search(r'^\w{3} \d{1,2} \d{2}:\d{2}:\d{2}', line)
             user_match = re.search(r'for (\w+) from', line)
+            invalid_user_match = re.search(r'invalid user (\w+)', line)
 
             if ip_match and date_match:
                 ip = ip_match.group(1)
                 date_time = datetime.strptime(date_match.group(0), '%b %d %H:%M:%S')
+                port = port_match.group(1) if port_match else 'N/A'
 
-                attacks.setdefault(ip, {'start': [], 'end': [], 'success': 0, 'fail': 0, 'users': set()})
+                attacks.setdefault(ip, {
+                    'start': [], 'end': [], 'success': 0, 'fail': 0, 'users': set(),
+                    'invalid_users': set(), 'ports': set()
+                })
                 attacks[ip]['start'].append(date_time)
                 attacks[ip]['end'].append(date_time)
+                attacks[ip]['ports'].add(port)
 
                 if user_match:
                     user = user_match.group(1)
                     attacks[ip]['users'].add(user)
-                    if "Failed password" in line:
-                        attacks[ip]['fail'] += 1
-                    elif "Accepted password" in line:
-                        attacks[ip]['success'] += 1
+                if invalid_user_match:
+                    invalid_user = invalid_user_match.group(1)
+                    attacks[ip]['invalid_users'].add(invalid_user)
+
+                if "Failed password" in line:
+                    attacks[ip]['fail'] += 1
+                elif "Accepted password" in line:
+                    attacks[ip]['success'] += 1
 
     return attacks
 
@@ -123,41 +90,59 @@ def export_to_excel(attacks, file_name):
     ws = wb.active
     ws.title = "Attack Report"
 
-    headers = ["IP Address", "Domain Name", "Country", "Region", "City", "Start Time", "End Time", "Successful Attempts",
-               "Failed Attempts", "Total Attempts", "Success/Failure Ratio", "Impacted Users", "Malicious"]
+    headers = ["IP Address", "Domain Name", "Country", "Region", "City", "Start Time", "End Time",
+               "Successful Attempts", "Failed Attempts", "Total Attempts", "Success/Failure Ratio",
+               "Impacted Users", "Invalid Users", "Ports", "Malicious"]
     ws.append(headers)
 
+    # Initialize sets to track unique valid and invalid users and ports
+    valid_users = set()
+    invalid_users = set()
+    valid_ports = set()
+    invalid_ports = set()
+
+    # Populate detailed attack data
     for ip, data in attacks.items():
+        if data['success'] > 0 or data['fail'] == 0:
+            valid_users.update(data['users'])
+            valid_ports.update(data['ports'])
+        if data['fail'] > 0:
+            invalid_users.update(data['invalid_users'])
+            invalid_ports.update(data['ports'])
+
         domain_name = domain_name_cache.get(ip, 'N/A')
         geo_info = geolocation_cache.get(ip, {'country': 'N/A', 'region': 'N/A', 'city': 'N/A'})
 
-        success_attempts = data['success']
-        failed_attempts = data['fail']
-        total_attempts = success_attempts + failed_attempts
-        if failed_attempts == 0:
-            success_failure_ratio = 'Inf'
-            malicious = 'No'  # Treat 'Inf' as not malicious
-        else:
-            success_failure_ratio = round(success_attempts / failed_attempts, 2)
-            malicious = 'Yes' if success_failure_ratio < 1 else 'No'
-
         row = [
-            ip, domain_name, geo_info['country'], geo_info['region'], geo_info['city'],
+            ip, domain_name, geo_info.get('country', 'N/A'), geo_info.get('region', 'N/A'), geo_info.get('city', 'N/A'),
             min(data['start']).strftime('%Y-%m-%d %H:%M:%S'), max(data['end']).strftime('%Y-%m-%d %H:%M:%S'),
-            success_attempts, failed_attempts, total_attempts,
-            success_failure_ratio, ', '.join(data['users']), malicious
+            data['success'], data['fail'], data['success'] + data['fail'],
+            'Inf' if data['fail'] == 0 else round(data['success'] / data['fail'], 2),
+            ', '.join(data['users']), ', '.join(data['invalid_users']), ', '.join(data['ports']),
+            'No' if data['success'] >= data['fail'] else 'Yes'
         ]
         ws.append(row)
 
+    # Apply table formatting to the attack report
     table_ref = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
     tab = Table(displayName="AttackReportTable", ref=table_ref)
-    style = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True, showColumnStripes=True)
+    style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=True, showRowStripes=True, showColumnStripes=True)
     tab.tableStyleInfo = style
     ws.add_table(tab)
 
+    # Insert the summary below the detailed data with two rows of separation
+    summary_start_row = ws.max_row + 3
+    ws.append([])  # Add an empty row for spacing
+    ws.append(["Summary"])
+    ws.append(["Valid Users", ', '.join(valid_users)])
+    ws.append(["Invalid Users", ', '.join(invalid_users)])
+    ws.append(["Valid Ports", ', '.join(valid_ports)])
+    ws.append(["Invalid Ports", ', '.join(invalid_ports)])
+
+    # Save the workbook
     wb.save(filename=file_name)
 
-
+# Main block that ties everything together.
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python3 script.py log_file")

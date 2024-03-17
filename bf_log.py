@@ -50,19 +50,19 @@ async def resolve_addresses(ip_addresses):
 
 def parse_auth_log(log_file):
     attacks = {}
-    sudo_usage = {}  # Dictionary to hold sudo command usage
+    sudo_usage = {}  # Dictionnaire pour stocker l'utilisation des commandes sudo
 
     with open(log_file, 'r') as file:
         for line in file:
-            # Parsing general authentication and attack details
+            # Analyse des détails d'authentification générale et des attaques
             ip_match = re.search(r'from (\d+\.\d+\.\d+\.\d+)', line)
             port_match = re.search(r'port (\d+)', line)
             date_match = re.search(r'^\w{3} \d{1,2} \d{2}:\d{2}:\d{2}', line)
             user_match = re.search(r'for (\w+) from', line)
             invalid_user_match = re.search(r'invalid user (\w+)', line)
 
-            # Check and parse sudo usage
-            sudo_match = re.search(r'sudo:.*?(\w+) : .*?COMMAND=(.*)', line)
+            # Vérification et analyse de l'utilisation de sudo
+            sudo_match = re.search(r'sudo:.*?(\w+) : .*?PWD=([^\s]+).*?COMMAND=(.*)', line)
 
             if ip_match and date_match:
                 ip = ip_match.group(1)
@@ -89,14 +89,14 @@ def parse_auth_log(log_file):
                 elif "Accepted password" in line:
                     attacks[ip]['success'] += 1
 
-            # If a sudo command execution is found, log it
+            # Si une exécution de commande sudo est trouvée, la consigner
             if sudo_match:
                 sudo_user = sudo_match.group(1)
-                sudo_command = sudo_match.group(2).strip()
-                sudo_usage.setdefault(sudo_user, []).append(sudo_command)
+                pwd = sudo_match.group(2)
+                sudo_command = sudo_match.group(3).strip()
+                sudo_usage.setdefault(sudo_user, []).append({'pwd': pwd, 'command': sudo_command})
 
     return attacks, sudo_usage
-
 def export_to_excel(attacks, sudo_usage, file_name):
     wb = Workbook()
     ws = wb.active
@@ -131,10 +131,12 @@ def export_to_excel(attacks, sudo_usage, file_name):
     # Create a new worksheet for sudo usage
     sudo_ws = wb.create_sheet("Sudo Usage")
 
-    sudo_ws.append(["User", "Commands Executed"])
+    sudo_ws.append(["User", "PWD", "CMD"])
     for user, commands in sudo_usage.items():
-        for command in commands:
-            sudo_ws.append([user, command])
+        for command_info in commands:
+            pwd = command_info.get('pwd', 'N/A')
+            cmd = command_info.get('command', 'N/A')
+            sudo_ws.append([user, pwd, cmd])
 
     # Save the workbook
     wb.save(filename=file_name)

@@ -50,13 +50,19 @@ async def resolve_addresses(ip_addresses):
 
 def parse_auth_log(log_file):
     attacks = {}
+    sudo_usage = {}  # Dictionary to hold sudo command usage
+
     with open(log_file, 'r') as file:
         for line in file:
+            # Parsing general authentication and attack details
             ip_match = re.search(r'from (\d+\.\d+\.\d+\.\d+)', line)
             port_match = re.search(r'port (\d+)', line)
             date_match = re.search(r'^\w{3} \d{1,2} \d{2}:\d{2}:\d{2}', line)
             user_match = re.search(r'for (\w+) from', line)
             invalid_user_match = re.search(r'invalid user (\w+)', line)
+
+            # Check and parse sudo usage
+            sudo_match = re.search(r'sudo:.*?(\w+) : .*?COMMAND=(.*)', line)
 
             if ip_match and date_match:
                 ip = ip_match.group(1)
@@ -83,9 +89,15 @@ def parse_auth_log(log_file):
                 elif "Accepted password" in line:
                     attacks[ip]['success'] += 1
 
-    return attacks
+            # If a sudo command execution is found, log it
+            if sudo_match:
+                sudo_user = sudo_match.group(1)
+                sudo_command = sudo_match.group(2).strip()
+                sudo_usage.setdefault(sudo_user, []).append(sudo_command)
 
-def export_to_excel(attacks, file_name):
+    return attacks, sudo_usage
+
+def export_to_excel(attacks, sudo_usage, file_name):
     wb = Workbook()
     ws = wb.active
     ws.title = "Attack Report"
@@ -95,21 +107,7 @@ def export_to_excel(attacks, file_name):
                "Impacted Users", "Invalid Users", "Ports", "Malicious"]
     ws.append(headers)
 
-    # Initialize sets to track unique valid and invalid users and ports
-    valid_users = set()
-    invalid_users = set()
-    valid_ports = set()
-    invalid_ports = set()
-
-    # Populate detailed attack data
     for ip, data in attacks.items():
-        if data['success'] > 0 or data['fail'] == 0:
-            valid_users.update(data['users'])
-            valid_ports.update(data['ports'])
-        if data['fail'] > 0:
-            invalid_users.update(data['invalid_users'])
-            invalid_ports.update(data['ports'])
-
         domain_name = domain_name_cache.get(ip, 'N/A')
         geo_info = geolocation_cache.get(ip, {'country': 'N/A', 'region': 'N/A', 'city': 'N/A'})
 
@@ -130,30 +128,28 @@ def export_to_excel(attacks, file_name):
     tab.tableStyleInfo = style
     ws.add_table(tab)
 
-    # Insert the summary below the detailed data with two rows of separation
-    summary_start_row = ws.max_row + 3
-    ws.append([])  # Add an empty row for spacing
-    ws.append(["Summary"])
-    ws.append(["Valid Users", ', '.join(valid_users)])
-    ws.append(["Invalid Users", ', '.join(invalid_users)])
-    ws.append(["Valid Ports", ', '.join(valid_ports)])
-    ws.append(["Invalid Ports", ', '.join(invalid_ports)])
+    # Create a new worksheet for sudo usage
+    sudo_ws = wb.create_sheet("Sudo Usage")
+
+    sudo_ws.append(["User", "Commands Executed"])
+    for user, commands in sudo_usage.items():
+        for command in commands:
+            sudo_ws.append([user, command])
 
     # Save the workbook
     wb.save(filename=file_name)
 
-# Main block that ties everything together.
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python3 script.py log_file")
         sys.exit(1)
 
     log_file = sys.argv[1]
-    attacks_data = parse_auth_log(log_file)
+    attacks_data, sudo_usage = parse_auth_log(log_file)
 
     # Resolve IP addresses before exporting to Excel
     ip_addresses = list(attacks_data.keys())
     asyncio.run(resolve_addresses(ip_addresses))
 
-    export_to_excel(attacks_data, 'attacks_report.xlsx')
+    export_to_excel(attacks_data, sudo_usage, 'attacks_report.xlsx')
     print('Report saved to attacks_report.xlsx.')

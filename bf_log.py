@@ -119,12 +119,6 @@ def parse_auth_log(log_file):
     return attacks
 
 def export_to_excel(attacks, file_name):
-    """
-    Export the aggregated attack data to an Excel file for analysis.
-
-    :param attacks: Aggregated attack data to export.
-    :param file_name: Name of the resulting Excel file.
-    """
     wb = Workbook()
     ws = wb.active
     ws.title = "Attack Report"
@@ -140,14 +134,18 @@ def export_to_excel(attacks, file_name):
         success_attempts = data['success']
         failed_attempts = data['fail']
         total_attempts = success_attempts + failed_attempts
-        success_failure_ratio = 'Inf' if failed_attempts == 0 and success_attempts > 0 else round(success_attempts / failed_attempts, 2) if failed_attempts != 0 else 'N/A'
+        if failed_attempts == 0:
+            success_failure_ratio = 'Inf'
+            malicious = 'No'  # Treat 'Inf' as not malicious
+        else:
+            success_failure_ratio = round(success_attempts / failed_attempts, 2)
+            malicious = 'Yes' if success_failure_ratio < 1 else 'No'
 
         row = [
             ip, domain_name, geo_info['country'], geo_info['region'], geo_info['city'],
             min(data['start']).strftime('%Y-%m-%d %H:%M:%S'), max(data['end']).strftime('%Y-%m-%d %H:%M:%S'),
             success_attempts, failed_attempts, total_attempts,
-            success_failure_ratio, ', '.join(data['users']),
-            'Yes' if success_attempts > 0 and (success_failure_ratio < 1 if isinstance(success_failure_ratio, float) else False) else 'No'
+            success_failure_ratio, ', '.join(data['users']), malicious
         ]
         ws.append(row)
 
@@ -158,6 +156,7 @@ def export_to_excel(attacks, file_name):
     ws.add_table(tab)
 
     wb.save(filename=file_name)
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

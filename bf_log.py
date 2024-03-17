@@ -12,16 +12,21 @@ class AuthLogParser:
         self.log_file = log_file
         self.domain_name_cache = {}
         self.geolocation_cache = {}
-
-    def is_local_ip(self, ip_address):
-        # Check if the IP address is within local network ranges.
-        local_networks = [
+        self.local_networks = [
             ('10.0.0.0', '10.255.255.255'),
             ('172.16.0.0', '172.31.255.255'),
             ('192.168.0.0', '192.168.255.255'),
         ]
+        self.headers = ["IP Address", "Domain Name", "Country", "Region", "City", "Start Time", "End Time",
+                   "Successful Attempts", "Failed Attempts", "Total Attempts", "Success/Failure Ratio",
+                   "Impacted Users", "Invalid Users", "Ports", "Malicious"]
+        
+        self.timeout = 5  # Timeout for HTTP requests in seconds.
+
+    def is_local_ip(self, ip_address):
+        # Check if the IP address is within local network ranges.
         ip_int = self.ip_to_int(ip_address)
-        return any(ip_int >= self.ip_to_int(start) and ip_int <= self.ip_to_int(end) for start, end in local_networks)
+        return any(ip_int >= self.ip_to_int(start) and ip_int <= self.ip_to_int(end) for start, end in self.local_networks)
 
     def ip_to_int(self, ip):
         # Convert IP address string to an integer.
@@ -43,7 +48,7 @@ class AuthLogParser:
         if ip_address in self.geolocation_cache or self.is_local_ip(ip_address):
             return
         try:
-            async with session.get(f'https://ipinfo.io/{ip_address}/json', timeout=5) as response:
+            async with session.get(f'https://ipinfo.io/{ip_address}/json', self.timeout) as response:
                 data = await response.json()
                 self.geolocation_cache[ip_address] = data
         except Exception as e:
@@ -139,10 +144,7 @@ class AuthLogParser:
         ws = wb.active
         ws.title = "Attack Report"
 
-        headers = ["IP Address", "Domain Name", "Country", "Region", "City", "Start Time", "End Time",
-                   "Successful Attempts", "Failed Attempts", "Total Attempts", "Success/Failure Ratio",
-                   "Impacted Users", "Invalid Users", "Ports", "Malicious"]
-        ws.append(headers)
+        ws.append(self.headers)
 
         for ip, data in attacks.items():
             domain_name = self.domain_name_cache.get(ip, 'N/A')

@@ -1,5 +1,7 @@
 # AuthLogParser
 
+**forensic assignment to be completed at ESIEA**
+
 ## Overview
 
 **AuthLogParser** is a Python script designed to parse and analyze authentication logs, identifying potential security threats such as brute-force attacks. It extracts relevant data from the log file, resolves IP addresses to domain names and geolocations, and outputs the results into a structured Excel report.

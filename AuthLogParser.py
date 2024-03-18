@@ -22,6 +22,7 @@ class AuthLogParser:
                         "Total Attempts", "Success/Failure Ratio", "Impacted Users", "Invalid Users",
                         "Ports", "Malicious"]
         
+        self.batch_size = 100
         self.timeout = 5  # Timeout for HTTP requests in seconds.
 
     def is_local_ip(self, ip_address):
@@ -62,11 +63,14 @@ class AuthLogParser:
                 'country': 'N/A', 'region': 'N/A', 'city': 'N/A', 'timezone': 'N/A', 'error': str(e)
             }
             
-    async def resolve_addresses(self, ip_addresses):
-        # Resolve domain names and geolocation information for a list of IP addresses.
+    async def resolve_addresses_batched(self, ip_addresses, ):
+        # Resolve domain names and geolocation information in batches.
         async with aiohttp.ClientSession() as session:
-            tasks = [self.get_domain_name(ip) for ip in ip_addresses] + [self.geolocate_ip(ip, session) for ip in ip_addresses]
-            await asyncio.gather(*tasks)
+            for i in range(0, len(ip_addresses), self.batch_size):
+                batch = ip_addresses[i:i + self.batch_size]
+                tasks = [self.get_domain_name(ip) for ip in batch] + \
+                        [self.geolocate_ip(ip, session) for ip in batch]
+                await asyncio.gather(*tasks)
 
     def parse_auth_log(self):
         # Parse the authentication log file to extract information.
@@ -211,7 +215,7 @@ if __name__ == "__main__":
     attacks_data, sudo_usage, other_activities = parser.parse_auth_log()
 
     ip_addresses = list(attacks_data.keys())
-    asyncio.run(parser.resolve_addresses(ip_addresses))
+    asyncio.run(parser.resolve_addresses_batched(ip_addresses))
 
     parser.export_to_excel(attacks_data, sudo_usage, other_activities, 'attacks_report.xlsx')
     print('Report saved to attacks_report.xlsx.')

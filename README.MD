@@ -1,6 +1,6 @@
 # AuthLogParser
 
-**forensic assignment to be completed at ESIEA**
+**forensic assignment at ESIEA**
 
 ## Overview
 

@@ -17,9 +17,10 @@ class AuthLogParser:
             ('172.16.0.0', '172.31.255.255'),
             ('192.168.0.0', '192.168.255.255'),
         ]
-        self.headers = ["IP Address", "Domain Name", "Country", "Region", "City", "Start Time", "End Time",
-                   "Successful Attempts", "Failed Attempts", "Total Attempts", "Success/Failure Ratio",
-                   "Impacted Users", "Invalid Users", "Ports", "Malicious"]
+        self.headers = ["IP Address", "Domain Name", "Country", "Region", "City", "Organization", "Timezone",
+                        "Start Time", "End Time", "Successful Attempts", "Failed Attempts",
+                        "Total Attempts", "Success/Failure Ratio", "Impacted Users", "Invalid Users",
+                        "Ports", "Malicious"]
         
         self.timeout = 5  # Timeout for HTTP requests in seconds.
 
@@ -44,16 +45,23 @@ class AuthLogParser:
             self.domain_name_cache[ip_address] = None
 
     async def geolocate_ip(self, ip_address, session):
-        # Asynchronously geolocate an IP address using the ipinfo.io API.
         if ip_address in self.geolocation_cache or self.is_local_ip(ip_address):
             return
         try:
-            async with session.get(f'https://ipinfo.io/{ip_address}/json', self.timeout) as response:
+            async with session.get(f'https://ipinfo.io/{ip_address}/json', timeout=self.timeout) as response:
                 data = await response.json()
-                self.geolocation_cache[ip_address] = data
+                # Store timezone information along with other geolocation data.
+                self.geolocation_cache[ip_address] = {
+                    'country': data.get('country', 'N/A'),
+                    'region': data.get('region', 'N/A'),
+                    'city': data.get('city', 'N/A'),
+                    'timezone': data.get('timezone', 'N/A')
+                }
         except Exception as e:
-            self.geolocation_cache[ip_address] = {'error': str(e)}
-
+            self.geolocation_cache[ip_address] = {
+                'country': 'N/A', 'region': 'N/A', 'city': 'N/A', 'timezone': 'N/A', 'error': str(e)
+            }
+            
     async def resolve_addresses(self, ip_addresses):
         # Resolve domain names and geolocation information for a list of IP addresses.
         async with aiohttp.ClientSession() as session:
@@ -148,10 +156,14 @@ class AuthLogParser:
 
         for ip, data in attacks.items():
             domain_name = self.domain_name_cache.get(ip, 'N/A')
-            geo_info = self.geolocation_cache.get(ip, {'country': 'N/A', 'region': 'N/A', 'city': 'N/A'})
+            geo_info = self.geolocation_cache.get(ip, {
+                'country': 'N/A', 'region': 'N/A', 'city': 'N/A', 'org': 'N/A', 'timezone': 'N/A'
+            })
 
             row = [
-                ip, domain_name, geo_info.get('country', 'N/A'), geo_info.get('region', 'N/A'), geo_info.get('city', 'N/A'),
+                ip, domain_name, geo_info.get('country', 'N/A'), geo_info.get('region', 'N/A'),
+                geo_info.get('city', 'N/A'), geo_info.get('org', 'N/A'), geo_info.get('timezone', 'N/A')
+            ] + [
                 min(data['start']).strftime('%Y-%m-%d %H:%M:%S'), max(data['end']).strftime('%Y-%m-%d %H:%M:%S'),
                 data['success'], data['fail'], data['success'] + data['fail'],
                 'Inf' if data['fail'] == 0 else round(data['success'] / data['fail'], 2),

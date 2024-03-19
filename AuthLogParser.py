@@ -2,6 +2,7 @@ import re
 import sys
 import asyncio
 import aiohttp
+import socket
 from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.worksheet.table import Table, TableStyleInfo
@@ -47,10 +48,11 @@ class AuthLogParser:
         if ip_address in self.domain_name_cache or self.is_local_ip(ip_address):
             return
         try:
-            info = await asyncio.get_event_loop().getaddrinfo(ip_address, None)
-            self.domain_name_cache[ip_address] = info[0][4][0]
+            # Execute gethostbyaddr in the default executor (thread pool) to prevent blocking.
+            hostname, _, _ = await asyncio.get_event_loop().run_in_executor(None, socket.gethostbyaddr, ip_address)
+            self.domain_name_cache[ip_address] = hostname
         except Exception:
-            self.domain_name_cache[ip_address] = None
+            self.domain_name_cache[ip_address] = "N/A"
 
     # Fetches geolocation data asynchronously.
     async def geolocate_ip(self, ip_address, session):

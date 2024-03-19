@@ -48,10 +48,13 @@ class AuthLogParser:
         if ip_address in self.domain_name_cache or self.is_local_ip(ip_address):
             return
         try:
-            # Execute gethostbyaddr in the default executor (thread pool) to prevent blocking.
-            hostname, _, _ = await asyncio.get_event_loop().run_in_executor(None, socket.gethostbyaddr, ip_address)
+            # Execute gethostbyaddr to prevent blocking.
+            hostname, _, _ = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, socket.gethostbyaddr, ip_address),
+            timeout=self.timeout)
             self.domain_name_cache[ip_address] = hostname
         except Exception:
+            # Otherwise 
             self.domain_name_cache[ip_address] = "N/A"
 
     # Fetches geolocation data asynchronously.

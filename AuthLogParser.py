@@ -9,33 +9,39 @@ from openpyxl.utils import get_column_letter
 
 class AuthLogParser:
     def __init__(self, log_file):
+        # Initializes parser with log file and sets up caches and configurations.
         self.log_file = log_file
         self.domain_name_cache = {}
         self.geolocation_cache = {}
+        # IP ranges for local networks.
         self.local_networks = [
             ('10.0.0.0', '10.255.255.255'),
             ('172.16.0.0', '172.31.255.255'),
             ('192.168.0.0', '192.168.255.255'),
         ]
+        # Headers for the output Excel report.
         self.headers = ["IP Address", "Domain Name", "Country", "Region", "City", "Organization", "Timezone",
                         "Start Time", "End Time", "Successful Attempts", "Failed Attempts",
                         "Total Attempts", "Malicious/Not Sure/No", "Impacted Users", "Invalid Users",
                         "Ports"]
         
-        self.malicious_threshold = 5  # Minimum number of attempts to consider for malicious activity.
-        self.batch_size = 100
+        self.malicious_threshold = 5  # Minimum number of attempts to flag an activity as potentially malicious.
+        self.batch_size = 100 # Number of IP addresses to process in parallel during domain and geolocation lookups.
         self.timeout = 5  # Timeout for HTTP requests in seconds.
 
+    # Checks if an IP is local.
     def is_local_ip(self, ip_address):
         # Check if the IP address is within local network ranges.
         ip_int = self.ip_to_int(ip_address)
         return any(ip_int >= self.ip_to_int(start) and ip_int <= self.ip_to_int(end) for start, end in self.local_networks)
 
+    # Converts an IP string to an integer.
     def ip_to_int(self, ip):
         # Convert IP address string to an integer.
         parts = ip.split('.')
         return (int(parts[0]) << 24) | (int(parts[1]) << 16) | (int(parts[2]) << 8) | int(parts[3])
 
+    # Fetches domain name asynchronously.
     async def get_domain_name(self, ip_address):
         # Asynchronously get the domain name for an IP address.
         if ip_address in self.domain_name_cache or self.is_local_ip(ip_address):
@@ -46,6 +52,7 @@ class AuthLogParser:
         except Exception:
             self.domain_name_cache[ip_address] = None
 
+    # Fetches geolocation data asynchronously.
     async def geolocate_ip(self, ip_address, session):
         if ip_address in self.geolocation_cache or self.is_local_ip(ip_address):
             return
@@ -63,7 +70,8 @@ class AuthLogParser:
             self.geolocation_cache[ip_address] = {
                 'country': 'N/A', 'region': 'N/A', 'city': 'N/A', 'timezone': 'N/A', 'error': str(e)
             }
-            
+    
+    # Processes IP addresses in batches for domain and geolocation data.
     async def resolve_addresses_batched(self, ip_addresses, ):
         # Resolve domain names and geolocation information in batches.
         async with aiohttp.ClientSession() as session:
@@ -73,14 +81,17 @@ class AuthLogParser:
                         [self.geolocate_ip(ip, session) for ip in batch]
                 await asyncio.gather(*tasks)
 
+    # Parses the log file.
     def parse_auth_log(self):
-        # Parse the authentication log file to extract information.
-        attacks = {}
-        sudo_usage = {}
-        other_activities = []
+        # Stores detected attacks and other information.
+        attacks, sudo_usage, other_activities = {}, {}, []
         current_year = datetime.now().year
 
+        # Reads and processes each line of the log file.
         with open(self.log_file, 'r') as file:
+            # Extracts date and IP address from the line.
+            # Other details like port and user are also extracted.
+            # Updates attacks data structure with this information.
             for line in file:
                 date_match = re.search(r'^\w{3} \d{1,2} \d{2}:\d{2}:\d{2}', line)
                 if not date_match:
@@ -100,7 +111,7 @@ class AuthLogParser:
                 elif not re.search(r'session (opened|closed) for user', line):
                     content = line[date_match.end():].strip()
                     other_activities.append((date_time_str, content))
-
+        # After processing, returns the gathered data.
         return attacks, sudo_usage, other_activities
 
     # Process a line related to sshd activity.
@@ -142,8 +153,9 @@ class AuthLogParser:
             'command': sudo_command
         })
 
-    # Apply Openpyxl table styling for sorting features.
+    # Adds a styled table to the Excel sheet.
     def apply_table_style(self, sheet):
+        # Adds and styles a table for better readability in Excel.
         table_name = f"{sheet.title.replace(' ', '_')}Table"
         table_ref = f"A1:{get_column_letter(sheet.max_column)}{sheet.max_row}"
         tab = Table(displayName=table_name, ref=table_ref)
@@ -152,7 +164,10 @@ class AuthLogParser:
         tab.tableStyleInfo = style
         sheet.add_table(tab)
 
+    # Exports data to an Excel file.
     def export_to_excel(self, attacks, sudo_usage, other_activities, file_name):
+        # Creates workbook and sheets, then populates them with data.
+        # Applies table styling and saves the workbook.
         wb = Workbook()
         ws = wb.active
         ws.title = "Attack Report"

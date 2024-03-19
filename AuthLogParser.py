@@ -64,16 +64,16 @@ class AuthLogParser:
         try:
             async with session.get(f'https://ipinfo.io/{ip_address}/json', timeout=self.timeout) as response:
                 data = await response.json()
-                # Store timezone information along with other geolocation data.
                 self.geolocation_cache[ip_address] = {
                     'country': data.get('country', 'N/A'),
                     'region': data.get('region', 'N/A'),
                     'city': data.get('city', 'N/A'),
+                    'org': data.get('org', 'N/A'),
                     'timezone': data.get('timezone', 'N/A')
                 }
         except Exception as e:
             self.geolocation_cache[ip_address] = {
-                'country': 'N/A', 'region': 'N/A', 'city': 'N/A', 'timezone': 'N/A', 'error': str(e)
+                'country': 'N/A', 'region': 'N/A', 'city': 'N/A', 'org': 'N/A', 'timezone': 'N/A', 'error': str(e)
             }
     
     # Processes IP addresses in batches for domain and geolocation data.

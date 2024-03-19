@@ -19,9 +19,10 @@ class AuthLogParser:
         ]
         self.headers = ["IP Address", "Domain Name", "Country", "Region", "City", "Organization", "Timezone",
                         "Start Time", "End Time", "Successful Attempts", "Failed Attempts",
-                        "Total Attempts", "Success/Failure Ratio", "Impacted Users", "Invalid Users",
-                        "Ports", "Malicious"]
+                        "Total Attempts", "Malicious/Not Sure/No", "Impacted Users", "Invalid Users",
+                        "Ports"]
         
+        self.malicious_threshold = 5  # Minimum number of attempts to consider for malicious activity.
         self.batch_size = 100
         self.timeout = 5  # Timeout for HTTP requests in seconds.
 
@@ -51,16 +52,16 @@ class AuthLogParser:
         try:
             async with session.get(f'https://ipinfo.io/{ip_address}/json', timeout=self.timeout) as response:
                 data = await response.json()
+                # Store timezone information along with other geolocation data.
                 self.geolocation_cache[ip_address] = {
                     'country': data.get('country', 'N/A'),
                     'region': data.get('region', 'N/A'),
                     'city': data.get('city', 'N/A'),
-                    'org': data.get('org', 'N/A'),
                     'timezone': data.get('timezone', 'N/A')
                 }
         except Exception as e:
             self.geolocation_cache[ip_address] = {
-                'country': 'N/A', 'region': 'N/A', 'city': 'N/A', 'org': 'N/A', 'timezone': 'N/A', 'error': str(e)
+                'country': 'N/A', 'region': 'N/A', 'city': 'N/A', 'timezone': 'N/A', 'error': str(e)
             }
             
     async def resolve_addresses_batched(self, ip_addresses, ):
@@ -164,22 +165,30 @@ class AuthLogParser:
                 'country': 'N/A', 'region': 'N/A', 'city': 'N/A', 'org': 'N/A', 'timezone': 'N/A'
             })
 
+            total_attempts = data['success'] + data['fail']
+            # Determine the malicious label based on the conditions.
+            if data['success'] > data['fail']:
+                malicious_label = "No"
+            elif total_attempts < self.malicious_threshold or data['fail'] == 0:
+                malicious_label = "Not Sure"
+            else:
+                failure_rate = data['fail'] / total_attempts
+                malicious_label = "Yes" if failure_rate > 0.9 else "Not Sure"
+
             row = [
                 ip, domain_name, geo_info.get('country', 'N/A'), geo_info.get('region', 'N/A'),
                 geo_info.get('city', 'N/A'), geo_info.get('org', 'N/A'), geo_info.get('timezone', 'N/A')
             ] + [
                 min(data['start']).strftime('%Y-%m-%d %H:%M:%S'), max(data['end']).strftime('%Y-%m-%d %H:%M:%S'),
-                data['success'], data['fail'], data['success'] + data['fail'],
-                'Inf' if data['fail'] == 0 else round(data['success'] / data['fail'], 2),
-                ', '.join(data['users']), ', '.join(data['invalid_users']), ', '.join(data['ports']),
-                'Yes' if data['success'] < data['fail'] else 'No'
+                data['success'], data['fail'], total_attempts,
+                malicious_label, ', '.join(data['users']), ', '.join(data['invalid_users']),
+                ', '.join(data['ports'])
             ]
             ws.append(row)
 
-        # Apply table formatting to the attack report
+        # Apply table formatting to the attack report, and handle the remaining sheets as before.
         self.apply_table_style(ws)
 
-        # Sudo Usage Sheet
         sudo_ws = wb.create_sheet("Sudo Usage")
         sudo_ws.append(["User", "Date", "PWD", "Command"])
         for user, commands in sudo_usage.items():
@@ -190,21 +199,15 @@ class AuthLogParser:
                     command_info['pwd'],
                     command_info['command']
                 ])
-
-        # Apply table styling for sorting features on "Sudo Usage"
         self.apply_table_style(sudo_ws)
 
-        # Other Activities Sheet
         other_ws = wb.create_sheet("Other Activities")
         other_ws.append(["Date", "Content"])
         for date_str, content in other_activities:
             other_ws.append([date_str, content])
-
-        # Apply table styling for sorting features on "Other Activities"
         self.apply_table_style(other_ws)
 
         wb.save(filename=file_name)
-
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

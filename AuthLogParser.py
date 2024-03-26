@@ -171,46 +171,47 @@ class AuthLogParser:
     def process_sshd_line(self, ip_match, line, date_time, attacks):
         ip = ip_match.group(1)
         port_match = re.search(r"port (\d+)", line)
-        user_match = re.search(r"for (\w+) from", line)
-        invalid_user_match = re.search(r"invalid user (\w+)", line)
         port = port_match.group(1) if port_match else "N/A"
 
-        attacks.setdefault(
-            ip,
-            {
-                "start": [],
-                "end": [],
+        user = "N/A"
+        user_match = re.search(r"for (\w+) from", line)
+        invalid_user_match = re.search(r"invalid user (\w+)", line)
+
+        if user_match:
+            user = user_match.group(1)
+        elif invalid_user_match:
+            user = invalid_user_match.group(1)
+
+        # Initialize dictionary structure for new IP addresses
+        if ip not in attacks:
+            attacks[ip] = {
+                "start": [date_time],
+                "end": [date_time],
                 "success": 0,
                 "fail": 0,
                 "users": set(),
                 "invalid_users": set(),
                 "ports": set(),
-            },
-        )
-        attacks[ip]["start"].append(date_time)
-        attacks[ip]["end"].append(date_time)
+                "success_details": [],
+            }
+        else:
+            # Update start and end times for existing entries
+            attacks[ip]["start"].append(date_time)
+            attacks[ip]["end"].append(date_time)
+
+        # Add port and update user details
         attacks[ip]["ports"].add(port)
-
-        if user_match:
-            user = user_match.group(1)
-            attacks[ip]["users"].add(user)
+        attacks[ip]["users"].add(user)
         if invalid_user_match:
-            invalid_user = invalid_user_match.group(1)
-            attacks[ip]["invalid_users"].add(invalid_user)
+            attacks[ip]["invalid_users"].add(user)
 
+        # Record details based on line content
         if "Failed password" in line:
             attacks[ip]["fail"] += 1
         elif "Accepted password" in line:
             attacks[ip]["success"] += 1
-            # Capture successful connection details
-            success_detail = (
-                f"{date_time.strftime('%Y-%m-%d %H:%M:%S')}, Port: {port}, IP: {ip}"
-            )
-            if "user" in line:
-                success_detail += (
-                    f", User: {user_match.group(1) if user_match else 'N/A'}"
-                )
-            attacks[ip].setdefault("success_details", []).append(success_detail)
+            connection_detail = f"{date_time.strftime('%Y-%m-%d %H:%M:%S')}, Port: {port}, IP: {ip}, User: {user}"
+            attacks[ip]["success_details"].append(connection_detail)
 
     # Process a line related to sudo usage.
     def process_sudo_line(self, sudo_match, line, date_time_str, sudo_usage):

@@ -1,4 +1,5 @@
 import re
+import csv
 import sys
 import asyncio
 import aiohttp
@@ -308,19 +309,105 @@ class AuthLogParser:
 
         wb.save(filename=file_name)
 
+    def export_to_csv(self, attacks, sudo_usage, other_activities, file_name):
+        with open(file_name, mode="w", newline="") as file:
+            writer = csv.writer(file)
+
+            # Attack Report
+            writer.writerow(self.headers)
+            for ip, data in attacks.items():
+                domain_name = self.domain_name_cache.get(ip, "N/A")
+                geo_info = self.geolocation_cache.get(
+                    ip,
+                    {
+                        "country": "N/A",
+                        "region": "N/A",
+                        "city": "N/A",
+                        "loc": "N/A",
+                        "org": "N/A",
+                        "postal": "N/A",
+                        "timezone": "N/A",
+                    },
+                )
+
+                total_attempts = data["success"] + data["fail"]
+                malicious_label = (
+                    "Yes"
+                    if total_attempts >= self.malicious_threshold and data["fail"] > 0
+                    else "No"
+                )
+
+                row = [
+                    ip,
+                    domain_name,
+                    geo_info.get("country", "N/A"),
+                    geo_info.get("region", "N/A"),
+                    geo_info.get("city", "N/A"),
+                    geo_info.get("loc", "N/A"),
+                    geo_info.get("org", "N/A"),
+                    geo_info.get("postal", "N/A"),
+                    geo_info.get("timezone", "N/A"),
+                    min(data["start"]).strftime("%Y-%m-%d %H:%M:%S"),
+                    max(data["end"]).strftime("%Y-%m-%d %H:%M:%S"),
+                    data["success"],
+                    data["fail"],
+                    total_attempts,
+                    malicious_label,
+                    ", ".join(data["users"]),
+                    ", ".join(data["invalid_users"]),
+                    ", ".join(data["ports"]),
+                ]
+                writer.writerow(row)
+
+            # Sudo Usage
+            writer.writerow([])
+            writer.writerow(["User", "Date", "PWD", "Command"])
+            for user, commands in sudo_usage.items():
+                for command_info in commands:
+                    writer.writerow(
+                        [
+                            user,
+                            command_info["date"],
+                            command_info["pwd"],
+                            command_info["command"],
+                        ]
+                    )
+
+            # Other Activities
+            writer.writerow([])
+            writer.writerow(["Date", "Content"])
+            for date_str, content in other_activities:
+                writer.writerow([date_str, content])
+
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python3 script.py log_file")
+    export_format = "xlsx"  # Default format
+    log_file_arg = None
+
+    # Process command-line arguments
+    for arg in sys.argv[1:]:
+        if arg == "-csv":
+            export_format = "csv"
+        else:
+            log_file_arg = arg
+
+    if not log_file_arg:
+        print("Usage: python3 script.py log_file [-csv]")
         exit(1)
 
-    parser = AuthLogParser(sys.argv[1])
+    parser = AuthLogParser(log_file_arg)
     attacks_data, sudo_usage, other_activities = parser.parse_auth_log()
 
     ip_addresses = list(attacks_data.keys())
     asyncio.run(parser.resolve_addresses_batched(ip_addresses))
 
-    parser.export_to_excel(
-        attacks_data, sudo_usage, other_activities, "attacks_report.xlsx"
-    )
-    print("Report saved to attacks_report.xlsx.")
+    if export_format == "csv":
+        parser.export_to_csv(
+            attacks_data, sudo_usage, other_activities, "attacks_report.csv"
+        )
+        print("Report saved to attacks_report.csv.")
+    else:
+        parser.export_to_excel(
+            attacks_data, sudo_usage, other_activities, "attacks_report.xlsx"
+        )
+        print("Report saved to attacks_report.xlsx.")

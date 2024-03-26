@@ -42,6 +42,7 @@ class AuthLogParser:
             "Impacted Users",
             "Invalid Users",
             "Ports",
+            "Success Details",
         ]
 
         self.malicious_threshold = 5  # Minimum number of attempts to flag an activity as potentially malicious.
@@ -201,6 +202,15 @@ class AuthLogParser:
             attacks[ip]["fail"] += 1
         elif "Accepted password" in line:
             attacks[ip]["success"] += 1
+            # Capture successful connection details
+            success_detail = (
+                f"{date_time.strftime('%Y-%m-%d %H:%M:%S')}, Port: {port}, IP: {ip}"
+            )
+            if "user" in line:
+                success_detail += (
+                    f", User: {user_match.group(1) if user_match else 'N/A'}"
+                )
+            attacks[ip].setdefault("success_details", []).append(success_detail)
 
     # Process a line related to sudo usage.
     def process_sudo_line(self, sudo_match, line, date_time_str, sudo_usage):
@@ -282,6 +292,11 @@ class AuthLogParser:
                 ", ".join(data["users"]),
                 ", ".join(data["invalid_users"]),
                 ", ".join(data["ports"]),
+                (
+                    "\n".join(data.get("success_details", []))
+                    if data["success"] < 6 or malicious_label == "Yes"
+                    else "N/A"
+                ),
             ]
             ws.append(row)
 
@@ -359,6 +374,11 @@ class AuthLogParser:
                         ", ".join(data["users"]),
                         ", ".join(data["invalid_users"]),
                         ", ".join(data["ports"]),
+                        (
+                            "; ".join(data.get("success_details", []))
+                            if data["success"] < 6 or malicious_label == "Yes"
+                            else "N/A"
+                        ),
                     ]
                 )
             writer.writerows(attack_rows)

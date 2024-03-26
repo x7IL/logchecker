@@ -8,3 +8,4 @@ include/
 /bin/*
 bin/
 attacks_report.xlsx
+pyvenv.cfg

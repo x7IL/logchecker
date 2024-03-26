@@ -316,6 +316,7 @@ class AuthLogParser:
 
             # Attack Report
             writer.writerow(self.headers)
+            attack_rows = []  # Initialize a list to store attack data rows.
             for ip, data in attacks.items():
                 domain_name = self.domain_name_cache.get(ip, "N/A")
                 geo_info = self.geolocation_cache.get(
@@ -338,47 +339,47 @@ class AuthLogParser:
                     else "No"
                 )
 
-                row = [
-                    ip,
-                    domain_name,
-                    geo_info.get("country", "N/A"),
-                    geo_info.get("region", "N/A"),
-                    geo_info.get("city", "N/A"),
-                    geo_info.get("loc", "N/A"),
-                    geo_info.get("org", "N/A"),
-                    geo_info.get("postal", "N/A"),
-                    geo_info.get("timezone", "N/A"),
-                    min(data["start"]).strftime("%Y-%m-%d %H:%M:%S"),
-                    max(data["end"]).strftime("%Y-%m-%d %H:%M:%S"),
-                    data["success"],
-                    data["fail"],
-                    total_attempts,
-                    malicious_label,
-                    ", ".join(data["users"]),
-                    ", ".join(data["invalid_users"]),
-                    ", ".join(data["ports"]),
-                ]
-                writer.writerow(row)
+                attack_rows.append(
+                    [
+                        ip,
+                        domain_name,
+                        geo_info["country"],
+                        geo_info["region"],
+                        geo_info["city"],
+                        geo_info["loc"],
+                        geo_info["org"],
+                        geo_info["postal"],
+                        geo_info["timezone"],
+                        min(data["start"]).strftime("%Y-%m-%d %H:%M:%S"),
+                        max(data["end"]).strftime("%Y-%m-%d %H:%M:%S"),
+                        data["success"],
+                        data["fail"],
+                        total_attempts,
+                        malicious_label,
+                        ", ".join(data["users"]),
+                        ", ".join(data["invalid_users"]),
+                        ", ".join(data["ports"]),
+                    ]
+                )
+            writer.writerows(attack_rows)
 
             # Sudo Usage
             writer.writerow([])
             writer.writerow(["User", "Date", "PWD", "Command"])
-            for user, commands in sudo_usage.items():
-                for command_info in commands:
-                    writer.writerow(
-                        [
-                            user,
-                            command_info["date"],
-                            command_info["pwd"],
-                            command_info["command"],
-                        ]
-                    )
+            sudo_rows = [
+                [user, cmd_info["date"], cmd_info["pwd"], cmd_info["command"]]
+                for user, commands in sudo_usage.items()
+                for cmd_info in commands
+            ]
+            writer.writerows(sudo_rows)
 
             # Other Activities
             writer.writerow([])
             writer.writerow(["Date", "Content"])
-            for date_str, content in other_activities:
-                writer.writerow([date_str, content])
+            other_activity_rows = [
+                [date_str, content] for date_str, content in other_activities
+            ]
+            writer.writerows(other_activity_rows)
 
 
 if __name__ == "__main__":

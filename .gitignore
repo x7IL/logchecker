@@ -1,7 +1,10 @@
 auth.log
 .git
 test.py
-/lib/
-/include/
-/bin/
+/lib/*
+lib/
+/include/*
+include/
+/bin/*
+bin/
 attacks_report.xlsx

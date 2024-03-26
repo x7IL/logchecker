@@ -70,7 +70,7 @@ class AuthLogParser:
 
     # Fetches domain name asynchronously.
     async def get_domain_name(self, ip_address):
-        # Asynchronously get the domain name for an IP address.
+        # Asynchronously retrieves the domain name for an IP address, caching the result.
         if ip_address in self.domain_name_cache or self.is_local_ip(ip_address):
             return
         try:
@@ -83,7 +83,6 @@ class AuthLogParser:
             )
             self.domain_name_cache[ip_address] = hostname
         except Exception:
-            # Otherwise
             self.domain_name_cache[ip_address] = "N/A"
 
     # Fetches geolocation data asynchronously.
@@ -117,18 +116,20 @@ class AuthLogParser:
             }
 
     # Processes IP addresses in batches for domain and geolocation data.
-    async def resolve_addresses_batched(
-        self,
-        ip_addresses,
-    ):
-        # Resolve domain names and geolocation information in batches.
+    async def resolve_addresses_batched(self, ip_addresses):
+        # Resolves domain names and geolocations in batches for efficiency.
         async with aiohttp.ClientSession() as session:
-            for i in range(0, len(ip_addresses), self.batch_size):
-                batch = ip_addresses[i : i + self.batch_size]
-                tasks = [self.get_domain_name(ip) for ip in batch] + [
-                    self.geolocate_ip(ip, session) for ip in batch
-                ]
-                await asyncio.gather(*tasks)
+            tasks = []
+            for ip_address in ip_addresses:
+                if ip_address not in self.domain_name_cache and not self.is_local_ip(
+                    ip_address
+                ):
+                    tasks.append(self.get_domain_name(ip_address))
+                if ip_address not in self.geolocation_cache and not self.is_local_ip(
+                    ip_address
+                ):
+                    tasks.append(self.geolocate_ip(ip_address, session))
+            await asyncio.gather(*tasks)
 
     # Parses the log file.
     def parse_auth_log(self):

@@ -38,7 +38,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV="/home/wxu/parse_log"
+VIRTUAL_ENV="/home/wxu/perso_github/logchecker"
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"
@@ -55,9 +55,9 @@ fi
 
 if [ -z "${VIRTUAL_ENV_DISABLE_PROMPT:-}" ] ; then
     _OLD_VIRTUAL_PS1="${PS1:-}"
-    PS1="(parse_log) ${PS1:-}"
+    PS1="(logchecker) ${PS1:-}"
     export PS1
-    VIRTUAL_ENV_PROMPT="(parse_log) "
+    VIRTUAL_ENV_PROMPT="(logchecker) "
     export VIRTUAL_ENV_PROMPT
 fi
 

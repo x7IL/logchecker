@@ -2,6 +2,7 @@ import os  # Pour les fonctionnalités du système d'exploitation
 import re  # Pour les expressions régulières
 import csv  # Pour la manipulation des fichiers CSV
 import sys  # Pour les fonctionnalités système
+from tqdm import tqdm
 import asyncio  # Pour la programmation asynchrone
 import aiohttp  # Pour les requêtes HTTP asynchrones
 import socket  # Pour les opérations réseau
@@ -138,19 +139,28 @@ class AuthLogParser:
     # Résolution asynchrone des adresses IP en lots
     async def resolve_addresses_batched(self, ip_addresses):
         async with aiohttp.ClientSession() as session:
-            tasks = []
-            # Création des tâches pour la résolution des adresses IP
-            for ip_address in ip_addresses:
-                if ip_address not in self.domain_name_cache and not self.is_local_ip(
-                    ip_address
-                ):
-                    tasks.append(self.get_domain_name(ip_address))
-                if ip_address not in self.geolocation_cache and not self.is_local_ip(
-                    ip_address
-                ):
-                    tasks.append(self.geolocate_ip(ip_address, session))
-            # Exécution asynchrone des tâches
-            await asyncio.gather(*tasks)
+            # Initialisation de la barre de progression en dehors de la boucle
+            with tqdm(
+                total=len(ip_addresses), desc="Resolving IP Addresses", unit=" IP"
+            ) as progress_bar:
+                for i in range(0, len(ip_addresses), self.batch_size):
+                    batch = ip_addresses[i : i + self.batch_size]
+                    tasks = []
+                    for ip_address in batch:
+                        if (
+                            ip_address not in self.domain_name_cache
+                            and not self.is_local_ip(ip_address)
+                        ):
+                            tasks.append(self.get_domain_name(ip_address))
+                        if (
+                            ip_address not in self.geolocation_cache
+                            and not self.is_local_ip(ip_address)
+                        ):
+                            tasks.append(self.geolocate_ip(ip_address, session))
+                    # Exécution asynchrone des tâches pour le lot courant
+                    await asyncio.gather(*tasks)
+                    # Mise à jour de la barre de progression après chaque lot traité
+                    progress_bar.update(len(batch))
 
     # Analyse du journal d'authentification pour les attaques et les commandes
     def parse_auth_log(self):
@@ -158,7 +168,10 @@ class AuthLogParser:
         current_year = datetime.now().year
 
         with open(self.log_file, "r") as file:
-            for line in file:
+            lines = file.readlines()  # Lisez toutes les lignes en une fois
+            for line in tqdm(
+                lines, desc="Analyzing log", unit=" lines"
+            ):  # Ajoutez tqdm ici
                 date_match = re.search(r"^\w{3} \d{1,2} \d{2}:\d{2}:\d{2}", line)
                 if not date_match:
                     continue
@@ -255,7 +268,9 @@ class AuthLogParser:
         ws.title = "Attack Report"
 
         ws.append(self.headers)
-        for ip, data in attacks.items():
+        for ip, data in tqdm(
+            attacks.items(), desc="Exporting attacks to Excel", unit="row"
+        ):
             domain_name = self.domain_name_cache.get(ip, "N/A")
             geo_info = self.geolocation_cache.get(
                 ip,
@@ -324,9 +339,10 @@ class AuthLogParser:
             command_counts[command] = len(logs)
 
         # Ajout des données des commandes et de leurs occurrences dans la feuille
-        for command, count in command_counts.items():
-            # Ajout de la commande et du nombre d'occurrences
-            unique_commands_ws.append([command, count, "Go to Attack Report"])
+        for command, count in tqdm(
+            logs_by_command.items(), desc="Processing commands", unit="cmd"
+        ):
+            unique_commands_ws.append([command, len(count), "Go to Attack Report"])
 
         # Ajout de l'hyperlien pour diriger vers la feuille "Attack Report" sur chaque ligne
         for row in unique_commands_ws.iter_rows(
@@ -338,15 +354,10 @@ class AuthLogParser:
         self.apply_table_style(unique_commands_ws)
 
         for command, logs in logs_by_command.items():
-            has_pid = any(pid != "N/A" for _, pid, _ in logs)
             command_ws = wb.create_sheet(title=command.capitalize())
-            headers = ["Date", "PID", "Log"] if has_pid else ["Date", "Log"]
-            command_ws.append(headers)
-            for log_entry in logs:
-                if has_pid:
-                    command_ws.append(log_entry)
-                else:
-                    command_ws.append([log_entry[0], log_entry[2]])
+            command_ws.append(["Date", "PID", "Log"])
+            for log_entry in tqdm(logs, desc=f"Exporting {command} logs", unit="log"):
+                command_ws.append(log_entry)
 
             self.apply_table_style(command_ws)
 
@@ -358,7 +369,9 @@ class AuthLogParser:
             writer = csv.writer(csvfile)
 
             writer.writerow(self.headers)
-            for ip, data in attacks.items():
+            for ip, data in tqdm(
+                attacks.items(), desc="Exporting attacks to CSV", unit="row"
+            ):
                 domain_name = self.domain_name_cache.get(ip, "N/A")
                 geo_info = self.geolocation_cache.get(
                     ip,
@@ -414,16 +427,15 @@ class AuthLogParser:
                 writer.writerow(row)
 
             for command, logs in logs_by_command.items():
-                has_pid = any(pid != "N/A" for _, pid, _ in logs)
                 writer.writerow([])
                 writer.writerow([command.capitalize()])
-                headers = ["Date", "PID", "Log"] if has_pid else ["Date", "Log"]
+                headers = ["Date", "PID", "Log"]
                 writer.writerow(headers)
-                for log_entry in logs:
-                    if has_pid:
-                        writer.writerow(log_entry)
-                    else:
-                        writer.writerow([log_entry[0], log_entry[2]])
+
+                for log_entry in tqdm(
+                    logs, desc=f"Exporting {command} logs", unit="log"
+                ):
+                    writer.writerow([log_entry[0], log_entry[1], log_entry[2]])
 
 
 if __name__ == "__main__":

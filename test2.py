@@ -1,3 +1,4 @@
+import os
 import re
 import csv
 import sys
@@ -133,6 +134,9 @@ class AuthLogParser:
                 date_time = datetime.strptime(date_str, "%b %d %H:%M:%S %Y")
                 date_time_str = date_time.strftime("%Y-%m-%d %H:%M:%S")
 
+                pid_match = re.search(r"\[(\d+)\]", line)
+                pid = pid_match.group(1) if pid_match else "N/A"
+
                 ip_match = re.search(r"from (\d+\.\d+\.\d+\.\d+)", line)
                 if ip_match:
                     self.process_sshd_line(ip_match, line, date_time, attacks)
@@ -142,7 +146,7 @@ class AuthLogParser:
                     command = command_match.group(1)
                     if command not in logs_by_command:
                         logs_by_command[command] = []
-                    logs_by_command[command].append((date_time_str, line.strip()))
+                    logs_by_command[command].append((date_time_str, pid, line.strip()))
 
         return attacks, logs_by_command
 
@@ -267,36 +271,127 @@ class AuthLogParser:
         self.apply_table_style(ws)
 
         for command, logs in logs_by_command.items():
+            has_pid = any(pid != "N/A" for _, pid, _ in logs)
             command_ws = wb.create_sheet(title=command.capitalize())
-            command_ws.append(["Date", "Log"])
+            headers = ["Date", "PID", "Log"] if has_pid else ["Date", "Log"]
+            command_ws.append(headers)
             for log_entry in logs:
-                command_ws.append(log_entry)
+                if has_pid:
+                    # Append the entire log entry as a single list when PID is included
+                    command_ws.append(log_entry)
+                else:
+                    # When PID is not included, create and append a list from relevant parts of the log entry
+                    command_ws.append([log_entry[0], log_entry[2]])  # Corrected here
+
             self.apply_table_style(command_ws)
 
         wb.save(filename=file_name)
 
+    def export_to_csv(self, attacks, logs_by_command, file_name):
+        with open(file_name, "w", newline="") as csvfile:
+            writer = csv.writer(csvfile)
+
+            # Write Attack Report
+            writer.writerow(self.headers)
+            for ip, data in attacks.items():
+                domain_name = self.domain_name_cache.get(ip, "N/A")
+                geo_info = self.geolocation_cache.get(
+                    ip,
+                    {
+                        "country": "N/A",
+                        "region": "N/A",
+                        "city": "N/A",
+                        "loc": "N/A",
+                        "org": "N/A",
+                        "postal": "N/A",
+                        "timezone": "N/A",
+                    },
+                )
+
+                total_attempts = data["success"] + data["fail"]
+                success_fail_ratio = (
+                    str(data["success"] / data["fail"])
+                    if data["fail"]
+                    else "N/A" if data["success"] == 0 else "1"
+                )
+
+                if data["success"] > data["fail"]:
+                    malicious_label = "No"
+                elif data["fail"] == 0 or total_attempts < self.malicious_threshold:
+                    malicious_label = "Not Sure"
+                else:
+                    malicious_label = (
+                        "Yes" if data["fail"] / total_attempts > 0.9 else "Not Sure"
+                    )
+
+                row = [
+                    ip,
+                    domain_name,
+                    geo_info.get("country", "N/A"),
+                    geo_info.get("region", "N/A"),
+                    geo_info.get("city", "N/A"),
+                    geo_info.get("loc", "N/A"),
+                    geo_info.get("org", "N/A"),
+                    geo_info.get("postal", "N/A"),
+                    geo_info.get("timezone", "N/A"),
+                    min(data["start"]).strftime("%Y-%m-%d %H:%M:%S"),
+                    max(data["end"]).strftime("%Y-%m-%d %H:%M:%S"),
+                    data["success"],
+                    data["fail"],
+                    total_attempts,
+                    success_fail_ratio,
+                    malicious_label,
+                    ", ".join(data["users"]),
+                    ", ".join(data["invalid_users"]),
+                    ", ".join(data["ports"]),
+                    "; ".join(data["success_details"]),
+                ]
+                writer.writerow(row)
+
+            # Write each command log
+            for command, logs in logs_by_command.items():
+                has_pid = any(pid != "N/A" for _, pid, _ in logs)
+                writer.writerow(
+                    []
+                )  # Empty line as separator between logs of different commands
+                writer.writerow([command.capitalize()])
+                headers = ["Date", "PID", "Log"] if has_pid else ["Date", "Log"]
+                writer.writerow(headers)
+                for log_entry in logs:
+                    if has_pid:
+                        writer.writerow(log_entry)
+                    else:
+                        writer.writerow([log_entry[0], log_entry[2]])
+
 
 if __name__ == "__main__":
-    # Vérifie si l'argument du fichier journal est fourni.
+    # Check if log file argument is provided
     if len(sys.argv) < 2:
         print("Usage: python3 script.py <log_file>")
-        sys.exit(1)  # Quitte le programme si aucun fichier n'est spécifié.
+        sys.exit(1)
 
-    # Le premier argument après le nom du script est le chemin du fichier journal.
+    # Extract log file path from arguments
     log_file_arg = sys.argv[1]
 
-    # Crée une instance de AuthLogParser avec le chemin du fichier journal fourni.
+    # Create AuthLogParser instance
     parser = AuthLogParser(log_file_arg)
 
-    # Analyse le fichier journal pour obtenir les données des attaques et des commandes.
+    # Parse log file for attack and command data
     attacks_data, logs_by_command = parser.parse_auth_log()
 
-    # Résout les adresses IP pour enrichir les données des attaques avec des informations supplémentaires.
+    # Resolve IP addresses to enrich attack data
     asyncio.run(parser.resolve_addresses_batched(list(attacks_data.keys())))
 
-    # Exporte les données analysées dans un fichier Excel.
-    output_file_name = "attacks_report.xlsx"
-    parser.export_to_excel(attacks_data, logs_by_command, output_file_name)
+    # Determine output file format (CSV/Excel) based on user option
+    output_folder = "reports"
+    os.makedirs(output_folder, exist_ok=True)  # Create folder if it doesn't exist
 
-    # Affiche un message indiquant où le rapport a été enregistré.
-    print(f"Report saved to {output_file_name}.")
+    if len(sys.argv) > 2 and sys.argv[2].lower() == "-csv":
+        for command, logs in logs_by_command.items():
+            output_file_name = f"{output_folder}/attacks_report_{command}.csv"
+            parser.export_to_csv(attacks_data, {command: logs}, output_file_name)
+            print(f"CSV report saved to {output_file_name}.")
+    else:
+        output_file_name = f"{output_folder}/attacks_report.xlsx"
+        parser.export_to_excel(attacks_data, logs_by_command, output_file_name)
+        print(f"Excel report saved to {output_file_name}.")

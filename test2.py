@@ -1,4 +1,5 @@
 import re
+import csv
 import sys
 import asyncio
 import aiohttp
@@ -7,6 +8,7 @@ from datetime import datetime
 from openpyxl import Workbook
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
+
 
 class AuthLogParser:
     def __init__(self, log_file):
@@ -19,10 +21,26 @@ class AuthLogParser:
             ("192.168.0.0", "192.168.255.255"),
         ]
         self.headers = [
-            "IP Address", "Domain Name", "Country", "Region", "City", "Localisation",
-            "Organization", "Postal", "Timezone", "Start Time", "End Time",
-            "Successful Attempts", "Failed Attempts", "Total Attempts",
-            "Malicious/Not Sure/No", "Impacted Users", "Invalid Users", "Ports", "Success Details",
+            "IP Address",
+            "Domain Name",
+            "Country",
+            "Region",
+            "City",
+            "Localisation",
+            "Organization",
+            "Postal",
+            "Timezone",
+            "Start Time",
+            "End Time",
+            "Successful Attempts",
+            "Failed Attempts",
+            "Total Attempts",
+            "Success/failed",
+            "Malicious/Not Sure/No",
+            "Impacted Users",
+            "Invalid Users",
+            "Ports",
+            "Success Details",
         ]
         self.malicious_threshold = 5
         self.batch_size = 100
@@ -30,18 +48,28 @@ class AuthLogParser:
 
     def is_local_ip(self, ip_address):
         ip_int = self.ip_to_int(ip_address)
-        return any(ip_int >= self.ip_to_int(start) and ip_int <= self.ip_to_int(end) for start, end in self.local_networks)
+        return any(
+            ip_int >= self.ip_to_int(start) and ip_int <= self.ip_to_int(end)
+            for start, end in self.local_networks
+        )
 
     def ip_to_int(self, ip):
         parts = ip.split(".")
-        return (int(parts[0]) << 24) | (int(parts[1]) << 16) | (int(parts[2]) << 8) | int(parts[3])
+        return (
+            (int(parts[0]) << 24)
+            | (int(parts[1]) << 16)
+            | (int(parts[2]) << 8)
+            | int(parts[3])
+        )
 
     async def get_domain_name(self, ip_address):
         if ip_address in self.domain_name_cache or self.is_local_ip(ip_address):
             return
         try:
             hostname, _, _ = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(None, socket.gethostbyaddr, ip_address),
+                asyncio.get_event_loop().run_in_executor(
+                    None, socket.gethostbyaddr, ip_address
+                ),
                 timeout=self.timeout,
             )
             self.domain_name_cache[ip_address] = hostname
@@ -52,27 +80,42 @@ class AuthLogParser:
         if ip_address in self.geolocation_cache or self.is_local_ip(ip_address):
             return
         try:
-            async with session.get(f"https://ipinfo.io/{ip_address}/json", timeout=self.timeout) as response:
+            async with session.get(
+                f"https://ipinfo.io/{ip_address}/json", timeout=self.timeout
+            ) as response:
                 data = await response.json()
                 self.geolocation_cache[ip_address] = {
-                    "country": data.get("country", "N/A"), "region": data.get("region", "N/A"),
-                    "city": data.get("city", "N/A"), "loc": data.get("loc", "N/A"),
-                    "org": data.get("org", "N/A"), "postal": data.get("postal", "N/A"),
+                    "country": data.get("country", "N/A"),
+                    "region": data.get("region", "N/A"),
+                    "city": data.get("city", "N/A"),
+                    "loc": data.get("loc", "N/A"),
+                    "org": data.get("org", "N/A"),
+                    "postal": data.get("postal", "N/A"),
                     "timezone": data.get("timezone", "N/A"),
                 }
         except Exception as e:
             self.geolocation_cache[ip_address] = {
-                "country": "N/A", "region": "N/A", "city": "N/A", "loc": "N/A",
-                "org": "N/A", "postal": "N/A", "timezone": "N/A", "error": str(e),
+                "country": "N/A",
+                "region": "N/A",
+                "city": "N/A",
+                "loc": "N/A",
+                "org": "N/A",
+                "postal": "N/A",
+                "timezone": "N/A",
+                "error": str(e),
             }
 
     async def resolve_addresses_batched(self, ip_addresses):
         async with aiohttp.ClientSession() as session:
             tasks = []
             for ip_address in ip_addresses:
-                if ip_address not in self.domain_name_cache and not self.is_local_ip(ip_address):
+                if ip_address not in self.domain_name_cache and not self.is_local_ip(
+                    ip_address
+                ):
                     tasks.append(self.get_domain_name(ip_address))
-                if ip_address not in self.geolocation_cache and not self.is_local_ip(ip_address):
+                if ip_address not in self.geolocation_cache and not self.is_local_ip(
+                    ip_address
+                ):
                     tasks.append(self.geolocate_ip(ip_address, session))
             await asyncio.gather(*tasks)
 
@@ -102,7 +145,7 @@ class AuthLogParser:
                     logs_by_command[command].append((date_time_str, line.strip()))
 
         return attacks, logs_by_command
-    
+
     def process_sshd_line(self, ip_match, line, date_time, attacks):
         ip = ip_match.group(1)
         port_match = re.search(r"port (\d+)", line)
@@ -141,7 +184,9 @@ class AuthLogParser:
             attacks[ip]["fail"] += 1
         elif "Accepted password" in line:
             attacks[ip]["success"] += 1
-            connection_detail = f"{date_time.strftime('%Y-%m-%d %H:%M:%S')}, Port: {port}, User: {user}"
+            connection_detail = (
+                f"{date_time.strftime('%Y-%m-%d %H:%M:%S')}, Port: {port}, User: {user}"
+            )
             attacks[ip]["success_details"].append(connection_detail)
 
     def apply_table_style(self, sheet):
@@ -166,23 +211,56 @@ class AuthLogParser:
         ws.append(self.headers)
         for ip, data in attacks.items():
             domain_name = self.domain_name_cache.get(ip, "N/A")
-            geo_info = self.geolocation_cache.get(ip, {
-                "country": "N/A", "region": "N/A", "city": "N/A",
-                "loc": "N/A", "org": "N/A", "postal": "N/A", "timezone": "N/A"
-            })
+            geo_info = self.geolocation_cache.get(
+                ip,
+                {
+                    "country": "N/A",
+                    "region": "N/A",
+                    "city": "N/A",
+                    "loc": "N/A",
+                    "org": "N/A",
+                    "postal": "N/A",
+                    "timezone": "N/A",
+                },
+            )
 
             total_attempts = data["success"] + data["fail"]
-            malicious_label = "Yes" if data["fail"] and total_attempts >= self.malicious_threshold else "No"
+            success_fail_ratio = (
+                str(data["success"] / data["fail"])
+                if data["fail"]
+                else "N/A" if data["success"] == 0 else "1"
+            )
+
+            if data["success"] > data["fail"]:
+                malicious_label = "No"
+            elif data["fail"] == 0 or total_attempts < self.malicious_threshold:
+                malicious_label = "Not Sure"
+            else:
+                malicious_label = (
+                    "Yes" if data["fail"] / total_attempts > 0.9 else "Not Sure"
+                )
 
             row = [
-                ip, domain_name, geo_info.get("country", "N/A"), geo_info.get("region", "N/A"),
-                geo_info.get("city", "N/A"), geo_info.get("loc", "N/A"), geo_info.get("org", "N/A"),
-                geo_info.get("postal", "N/A"), geo_info.get("timezone", "N/A"),
+                ip,
+                domain_name,
+                geo_info.get("country", "N/A"),
+                geo_info.get("region", "N/A"),
+                geo_info.get("city", "N/A"),
+                geo_info.get("loc", "N/A"),
+                geo_info.get("org", "N/A"),
+                geo_info.get("postal", "N/A"),
+                geo_info.get("timezone", "N/A"),
                 min(data["start"]).strftime("%Y-%m-%d %H:%M:%S"),
                 max(data["end"]).strftime("%Y-%m-%d %H:%M:%S"),
-                data["success"], data["fail"], total_attempts, malicious_label,
-                ", ".join(data["users"]), ", ".join(data["invalid_users"]),
-                ", ".join(data["ports"]), "; ".join(data["success_details"])
+                data["success"],
+                data["fail"],
+                total_attempts,
+                success_fail_ratio,
+                malicious_label,
+                ", ".join(data["users"]),
+                ", ".join(data["invalid_users"]),
+                ", ".join(data["ports"]),
+                "; ".join(data["success_details"]),
             ]
             ws.append(row)
 

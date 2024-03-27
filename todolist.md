@@ -7,6 +7,7 @@
 - [x] **IP to hostname resolution** - Convert IP addresses to more readable hostnames.
 - [x] **Geolocate IP addresses** - Add geographical location information for each IP address.
 - [x] **Temporal analysis** - Analyze and highlight patterns based on the timing of attacks.
-- [x] Ajouter la date de connexion + le port
-- [] Chaque commandes exécuter à sa propre feuille
-- [] check qui à exécuter les commandes par rapport à la date d'exécution et les debuts de connexions/fins
+- [x] Add connection date + port
+- [x] Each executed command has its own sheet
+- [] Check who executed such commands with respect to the execution date and the start/end of connections
+- [] Add a sheet that lists all the commands and when one presses on the command it sends us to the sheet

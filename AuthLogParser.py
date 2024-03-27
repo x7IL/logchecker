@@ -12,17 +12,14 @@ from openpyxl.utils import get_column_letter
 
 class AuthLogParser:
     def __init__(self, log_file):
-        # Initializes parser with log file and sets up caches and configurations.
         self.log_file = log_file
         self.domain_name_cache = {}
         self.geolocation_cache = {}
-        # IP ranges for local networks.
         self.local_networks = [
             ("10.0.0.0", "10.255.255.255"),
             ("172.16.0.0", "172.31.255.255"),
             ("192.168.0.0", "192.168.255.255"),
         ]
-        # Headers for the output Excel report.
         self.headers = [
             "IP Address",
             "Domain Name",
@@ -38,29 +35,25 @@ class AuthLogParser:
             "Successful Attempts",
             "Failed Attempts",
             "Total Attempts",
+            "Success/failed",
             "Malicious/Not Sure/No",
             "Impacted Users",
             "Invalid Users",
             "Ports",
             "Success Details",
         ]
+        self.malicious_threshold = 5
+        self.batch_size = 100
+        self.timeout = 5
 
-        self.malicious_threshold = 5  # Minimum number of attempts to flag an activity as potentially malicious.
-        self.batch_size = 100  # Number of IP addresses to process in parallel during domain and geolocation lookups.
-        self.timeout = 5  # Timeout for HTTP requests in seconds.
-
-    # Checks if an IP is local.
     def is_local_ip(self, ip_address):
-        # Check if the IP address is within local network ranges.
         ip_int = self.ip_to_int(ip_address)
         return any(
             ip_int >= self.ip_to_int(start) and ip_int <= self.ip_to_int(end)
             for start, end in self.local_networks
         )
 
-    # Converts an IP string to an integer.
     def ip_to_int(self, ip):
-        # Convert IP address string to an integer.
         parts = ip.split(".")
         return (
             (int(parts[0]) << 24)
@@ -69,13 +62,10 @@ class AuthLogParser:
             | int(parts[3])
         )
 
-    # Fetches domain name asynchronously.
     async def get_domain_name(self, ip_address):
-        # Asynchronously retrieves the domain name for an IP address, caching the result.
         if ip_address in self.domain_name_cache or self.is_local_ip(ip_address):
             return
         try:
-            # Execute gethostbyaddr to prevent blocking.
             hostname, _, _ = await asyncio.wait_for(
                 asyncio.get_event_loop().run_in_executor(
                     None, socket.gethostbyaddr, ip_address
@@ -86,7 +76,6 @@ class AuthLogParser:
         except Exception:
             self.domain_name_cache[ip_address] = "N/A"
 
-    # Fetches geolocation data asynchronously.
     async def geolocate_ip(self, ip_address, session):
         if ip_address in self.geolocation_cache or self.is_local_ip(ip_address):
             return
@@ -116,9 +105,7 @@ class AuthLogParser:
                 "error": str(e),
             }
 
-    # Processes IP addresses in batches for domain and geolocation data.
     async def resolve_addresses_batched(self, ip_addresses):
-        # Resolves domain names and geolocations in batches for efficiency.
         async with aiohttp.ClientSession() as session:
             tasks = []
             for ip_address in ip_addresses:
@@ -132,17 +119,11 @@ class AuthLogParser:
                     tasks.append(self.geolocate_ip(ip_address, session))
             await asyncio.gather(*tasks)
 
-    # Parses the log file.
     def parse_auth_log(self):
-        # Stores detected attacks and other information.
-        attacks, sudo_usage, other_activities = {}, {}, []
+        attacks, logs_by_command = {}, {}
         current_year = datetime.now().year
 
-        # Reads and processes each line of the log file.
         with open(self.log_file, "r") as file:
-            # Extracts date and IP address from the line.
-            # Other details like port and user are also extracted.
-            # Updates attacks data structure with this information.
             for line in file:
                 date_match = re.search(r"^\w{3} \d{1,2} \d{2}:\d{2}:\d{2}", line)
                 if not date_match:
@@ -156,18 +137,15 @@ class AuthLogParser:
                 if ip_match:
                     self.process_sshd_line(ip_match, line, date_time, attacks)
 
-                sudo_match = re.search(
-                    r"sudo:.*?(\w+) : .*?PWD=([^\s]+).*?COMMAND=(.*)", line
-                )
-                if sudo_match:
-                    self.process_sudo_line(sudo_match, line, date_time_str, sudo_usage)
-                elif not re.search(r"session (opened|closed) for user", line):
-                    content = line[date_match.end() :].strip()
-                    other_activities.append((date_time_str, content))
-        # After processing, returns the gathered data.
-        return attacks, sudo_usage, other_activities
+                command_match = re.search(r"app-1 (\w+)", line)
+                if command_match:
+                    command = command_match.group(1)
+                    if command not in logs_by_command:
+                        logs_by_command[command] = []
+                    logs_by_command[command].append((date_time_str, line.strip()))
 
-    # Process a line related to sshd activity.
+        return attacks, logs_by_command
+
     def process_sshd_line(self, ip_match, line, date_time, attacks):
         ip = ip_match.group(1)
         port_match = re.search(r"port (\d+)", line)
@@ -182,7 +160,6 @@ class AuthLogParser:
         elif invalid_user_match:
             user = invalid_user_match.group(1)
 
-        # Initialize dictionary structure for new IP addresses
         if ip not in attacks:
             attacks[ip] = {
                 "start": [date_time],
@@ -195,36 +172,24 @@ class AuthLogParser:
                 "success_details": [],
             }
         else:
-            # Update start and end times for existing entries
             attacks[ip]["start"].append(date_time)
             attacks[ip]["end"].append(date_time)
 
-        # Add port and update user details
         attacks[ip]["ports"].add(port)
         attacks[ip]["users"].add(user)
         if invalid_user_match:
             attacks[ip]["invalid_users"].add(user)
 
-        # Record details based on line content
         if "Failed password" in line:
             attacks[ip]["fail"] += 1
         elif "Accepted password" in line:
             attacks[ip]["success"] += 1
-            connection_detail = f"{date_time.strftime('%Y-%m-%d %H:%M:%S')}, Port: {port}, IP: {ip}, User: {user}"
+            connection_detail = (
+                f"{date_time.strftime('%Y-%m-%d %H:%M:%S')}, Port: {port}, User: {user}"
+            )
             attacks[ip]["success_details"].append(connection_detail)
 
-    # Process a line related to sudo usage.
-    def process_sudo_line(self, sudo_match, line, date_time_str, sudo_usage):
-        sudo_user = sudo_match.group(1)
-        pwd = sudo_match.group(2)
-        sudo_command = sudo_match.group(3).strip()
-        sudo_usage.setdefault(sudo_user, []).append(
-            {"date": date_time_str, "pwd": pwd, "command": sudo_command}
-        )
-
-    # Adds a styled table to the Excel sheet.
     def apply_table_style(self, sheet):
-        # Adds and styles a table for better readability in Excel.
         table_name = f"{sheet.title.replace(' ', '_')}Table"
         table_ref = f"A1:{get_column_letter(sheet.max_column)}{sheet.max_row}"
         tab = Table(displayName=table_name, ref=table_ref)
@@ -238,16 +203,12 @@ class AuthLogParser:
         tab.tableStyleInfo = style
         sheet.add_table(tab)
 
-    # Exports data to an Excel file.
-    def export_to_excel(self, attacks, sudo_usage, other_activities, file_name):
-        # Creates workbook and sheets, then populates them with data.
-        # Applies table styling and saves the workbook.
+    def export_to_excel(self, attacks, logs_by_command, file_name):
         wb = Workbook()
         ws = wb.active
         ws.title = "Attack Report"
 
         ws.append(self.headers)
-
         for ip, data in attacks.items():
             domain_name = self.domain_name_cache.get(ip, "N/A")
             geo_info = self.geolocation_cache.get(
@@ -256,7 +217,7 @@ class AuthLogParser:
                     "country": "N/A",
                     "region": "N/A",
                     "city": "N/A",
-                    "local": "N/A",
+                    "loc": "N/A",
                     "org": "N/A",
                     "postal": "N/A",
                     "timezone": "N/A",
@@ -264,14 +225,20 @@ class AuthLogParser:
             )
 
             total_attempts = data["success"] + data["fail"]
-            # Determine the malicious label based on the conditions.
+            success_fail_ratio = (
+                str(data["success"] / data["fail"])
+                if data["fail"]
+                else "N/A" if data["success"] == 0 else "1"
+            )
+
             if data["success"] > data["fail"]:
                 malicious_label = "No"
-            elif total_attempts < self.malicious_threshold or data["fail"] == 0:
+            elif data["fail"] == 0 or total_attempts < self.malicious_threshold:
                 malicious_label = "Not Sure"
             else:
-                failure_rate = data["fail"] / total_attempts
-                malicious_label = "Yes" if failure_rate > 0.9 else "Not Sure"
+                malicious_label = (
+                    "Yes" if data["fail"] / total_attempts > 0.9 else "Not Sure"
+                )
 
             row = [
                 ip,
@@ -283,154 +250,53 @@ class AuthLogParser:
                 geo_info.get("org", "N/A"),
                 geo_info.get("postal", "N/A"),
                 geo_info.get("timezone", "N/A"),
-            ] + [
                 min(data["start"]).strftime("%Y-%m-%d %H:%M:%S"),
                 max(data["end"]).strftime("%Y-%m-%d %H:%M:%S"),
                 data["success"],
                 data["fail"],
                 total_attempts,
+                success_fail_ratio,
                 malicious_label,
                 ", ".join(data["users"]),
                 ", ".join(data["invalid_users"]),
                 ", ".join(data["ports"]),
-                (
-                    "\n".join(data.get("success_details", []))
-                    if data["success"] < 6 or malicious_label == "Yes"
-                    else "N/A"
-                ),
+                "; ".join(data["success_details"]),
             ]
             ws.append(row)
 
-        # Apply table formatting to the attack report, and handle the remaining sheets as before.
         self.apply_table_style(ws)
 
-        sudo_ws = wb.create_sheet("Sudo Usage")
-        sudo_ws.append(["User", "Date", "PWD", "Command"])
-        for user, commands in sudo_usage.items():
-            for command_info in commands:
-                sudo_ws.append(
-                    [
-                        user,
-                        command_info["date"],
-                        command_info["pwd"],
-                        command_info["command"],
-                    ]
-                )
-        self.apply_table_style(sudo_ws)
-
-        other_ws = wb.create_sheet("Other Activities")
-        other_ws.append(["Date", "Content"])
-        for date_str, content in other_activities:
-            other_ws.append([date_str, content])
-        self.apply_table_style(other_ws)
+        for command, logs in logs_by_command.items():
+            command_ws = wb.create_sheet(title=command.capitalize())
+            command_ws.append(["Date", "Log"])
+            for log_entry in logs:
+                command_ws.append(log_entry)
+            self.apply_table_style(command_ws)
 
         wb.save(filename=file_name)
 
-    def export_to_csv(self, attacks, sudo_usage, other_activities, file_name):
-        with open(file_name, mode="w", newline="") as file:
-            writer = csv.writer(file)
-
-            # Attack Report
-            writer.writerow(self.headers)
-            attack_rows = []  # Initialize a list to store attack data rows.
-            for ip, data in attacks.items():
-                domain_name = self.domain_name_cache.get(ip, "N/A")
-                geo_info = self.geolocation_cache.get(
-                    ip,
-                    {
-                        "country": "N/A",
-                        "region": "N/A",
-                        "city": "N/A",
-                        "loc": "N/A",
-                        "org": "N/A",
-                        "postal": "N/A",
-                        "timezone": "N/A",
-                    },
-                )
-
-                total_attempts = data["success"] + data["fail"]
-                malicious_label = (
-                    "Yes"
-                    if total_attempts >= self.malicious_threshold and data["fail"] > 0
-                    else "No"
-                )
-
-                attack_rows.append(
-                    [
-                        ip,
-                        domain_name,
-                        geo_info["country"],
-                        geo_info["region"],
-                        geo_info["city"],
-                        geo_info["loc"],
-                        geo_info["org"],
-                        geo_info["postal"],
-                        geo_info["timezone"],
-                        min(data["start"]).strftime("%Y-%m-%d %H:%M:%S"),
-                        max(data["end"]).strftime("%Y-%m-%d %H:%M:%S"),
-                        data["success"],
-                        data["fail"],
-                        total_attempts,
-                        malicious_label,
-                        ", ".join(data["users"]),
-                        ", ".join(data["invalid_users"]),
-                        ", ".join(data["ports"]),
-                        (
-                            "; ".join(data.get("success_details", []))
-                            if data["success"] < 6 or malicious_label == "Yes"
-                            else "N/A"
-                        ),
-                    ]
-                )
-            writer.writerows(attack_rows)
-
-            # Sudo Usage
-            writer.writerow([])
-            writer.writerow(["User", "Date", "PWD", "Command"])
-            sudo_rows = [
-                [user, cmd_info["date"], cmd_info["pwd"], cmd_info["command"]]
-                for user, commands in sudo_usage.items()
-                for cmd_info in commands
-            ]
-            writer.writerows(sudo_rows)
-
-            # Other Activities
-            writer.writerow([])
-            writer.writerow(["Date", "Content"])
-            other_activity_rows = [
-                [date_str, content] for date_str, content in other_activities
-            ]
-            writer.writerows(other_activity_rows)
-
 
 if __name__ == "__main__":
-    export_format = "xlsx"  # Default format
-    log_file_arg = None
+    # Vérifie si l'argument du fichier journal est fourni.
+    if len(sys.argv) < 2:
+        print("Usage: python3 script.py <log_file>")
+        sys.exit(1)  # Quitte le programme si aucun fichier n'est spécifié.
 
-    # Process command-line arguments
-    for arg in sys.argv[1:]:
-        if arg == "-csv":
-            export_format = "csv"
-        else:
-            log_file_arg = arg
+    # Le premier argument après le nom du script est le chemin du fichier journal.
+    log_file_arg = sys.argv[1]
 
-    if not log_file_arg:
-        print("Usage: python3 script.py log_file [-csv]")
-        exit(1)
-
+    # Crée une instance de AuthLogParser avec le chemin du fichier journal fourni.
     parser = AuthLogParser(log_file_arg)
-    attacks_data, sudo_usage, other_activities = parser.parse_auth_log()
 
-    ip_addresses = list(attacks_data.keys())
-    asyncio.run(parser.resolve_addresses_batched(ip_addresses))
+    # Analyse le fichier journal pour obtenir les données des attaques et des commandes.
+    attacks_data, logs_by_command = parser.parse_auth_log()
 
-    if export_format == "csv":
-        parser.export_to_csv(
-            attacks_data, sudo_usage, other_activities, "attacks_report.csv"
-        )
-        print("Report saved to attacks_report.csv.")
-    else:
-        parser.export_to_excel(
-            attacks_data, sudo_usage, other_activities, "attacks_report.xlsx"
-        )
-        print("Report saved to attacks_report.xlsx.")
+    # Résout les adresses IP pour enrichir les données des attaques avec des informations supplémentaires.
+    asyncio.run(parser.resolve_addresses_batched(list(attacks_data.keys())))
+
+    # Exporte les données analysées dans un fichier Excel.
+    output_file_name = "attacks_report.xlsx"
+    parser.export_to_excel(attacks_data, logs_by_command, output_file_name)
+
+    # Affiche un message indiquant où le rapport a été enregistré.
+    print(f"Report saved to {output_file_name}.")

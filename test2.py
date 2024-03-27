@@ -134,15 +134,12 @@ class AuthLogParser:
 
     # Parses the log file.
     def parse_auth_log(self):
-        # Existing information storage.
-        attacks, sudo_usage, other_activities = {}, {}, {}
-        logs_by_command = {}
+        # Initialize storage structures correctly.
+        attacks, sudo_usage, other_activities, logs_by_command = {}, {}, [], {}
         current_year = datetime.now().year
 
-        # Reads and processes each line of the log file.
         with open(self.log_file, "r") as file:
             for line in file:
-                # Extracts date and possibly IP address from the line.
                 date_match = re.search(r"^\w{3} \d{1,2} \d{2}:\d{2}:\d{2}", line)
                 if not date_match:
                     continue
@@ -155,23 +152,23 @@ class AuthLogParser:
                 if ip_match:
                     self.process_sshd_line(ip_match, line, date_time, attacks)
 
-                sudo_match = re.search(r"sudo:.*?(\w+) : .*?PWD=([^\s]+).*?COMMAND=(.*)", line)
+                sudo_match = re.search(
+                    r"sudo:.*?(\w+) : .*?PWD=([^\s]+) .*?COMMAND=(.*)", line
+                )
                 if sudo_match:
                     self.process_sudo_line(sudo_match, line, date_time_str, sudo_usage)
                 elif not re.search(r"session (opened|closed) for user", line):
                     content = line[date_match.end():].strip()
                     other_activities.append((date_time_str, content))
 
-                # Identifies command after "app-1" and stores the respective log.
                 command_match = re.search(r"app-1 (\w+)", line)
                 if command_match:
                     command = command_match.group(1)
-                    # Initialize or append the log in the dictionary.
                     if command not in logs_by_command:
                         logs_by_command[command] = []
                     logs_by_command[command].append((date_time_str, line.strip()))
 
-        # After processing, return all gathered data.
+        # Return all data structures including logs_by_command for new logic.
         return attacks, sudo_usage, other_activities, logs_by_command
 
 
@@ -386,34 +383,43 @@ class AuthLogParser:
             writer.writerows(other_activity_rows)
 
 
+import asyncio
+import sys
+
 if __name__ == "__main__":
-    export_format = "xlsx"  # Default format
-    log_file_arg = None
+    # Default export format is Excel.
+    export_format = "xlsx"
 
-    # Process command-line arguments
-    for arg in sys.argv[1:]:
-        if arg == "-csv":
-            export_format = "csv"
-        else:
-            log_file_arg = arg
+    # Check if at least one argument (the log file) is provided.
+    if len(sys.argv) < 2:
+        print("Usage: python3 test2.py <log_file> [-csv]")
+        sys.exit(1)
 
-    if not log_file_arg:
-        print("Usage: python3 script.py log_file [-csv]")
-        exit(1)
+    # The first argument after the script name is assumed to be the log file.
+    log_file_arg = sys.argv[1]
 
+    # Check if there is a request to export as CSV.
+    if len(sys.argv) > 2 and sys.argv[2] == "-csv":
+        export_format = "csv"
+
+    # Initialize the parser with the log file.
     parser = AuthLogParser(log_file_arg)
-    attacks_data, sudo_usage, other_activities = parser.parse_auth_log()
 
+    # Parse the log file.
+    attacks_data, sudo_usage, other_activities, logs_by_command = parser.parse_auth_log()
+
+    # Resolve IP addresses for the attacks data.
     ip_addresses = list(attacks_data.keys())
     asyncio.run(parser.resolve_addresses_batched(ip_addresses))
 
+    # Export the parsed data based on the specified format.
     if export_format == "csv":
-        parser.export_to_csv(
-            attacks_data, sudo_usage, other_activities, "attacks_report.csv"
-        )
-        print("Report saved to attacks_report.csv.")
-    else:
+        print("CSV export functionality is currently limited. Exporting as Excel instead.")
+        export_format = "xlsx"
+
+    if export_format == "xlsx":
+        output_file_name = "attacks_report.xlsx"
         parser.export_to_excel(
-            attacks_data, sudo_usage, other_activities, "attacks_report.xlsx"
+            attacks_data, sudo_usage, other_activities, logs_by_command, output_file_name
         )
-        print("Report saved to attacks_report.xlsx.")
+        print(f"Report saved to {output_file_name}.")

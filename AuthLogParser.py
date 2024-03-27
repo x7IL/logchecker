@@ -175,7 +175,7 @@ class AuthLogParser:
                     self.process_sshd_line(ip_match, line, date_time, attacks)
 
                 command_match = re.search(
-                    r"^\w{3} \d{1,2} \d{2}:\d{2}:\d{2} \w+ (\w+)", line
+                    r"\w{3} \d{1,2} \d{2}:\d{2}:\d{2} \S+ (\w+)", line
                 )
 
                 if command_match:

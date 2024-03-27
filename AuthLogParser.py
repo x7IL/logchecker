@@ -140,6 +140,7 @@ class AuthLogParser:
     async def resolve_addresses_batched(self, ip_addresses):
         async with aiohttp.ClientSession() as session:
             # Initialisation de la barre de progression en dehors de la boucle
+            print("")
             with tqdm(
                 total=len(ip_addresses), desc="Resolving IP Addresses", unit=" IP"
             ) as progress_bar:
@@ -169,6 +170,7 @@ class AuthLogParser:
 
         with open(self.log_file, "r") as file:
             lines = file.readlines()  # Lisez toutes les lignes en une fois
+            print("")
             for line in tqdm(
                 lines, desc="Analyzing log", unit=" lines"
             ):  # Ajoutez tqdm ici
@@ -268,6 +270,7 @@ class AuthLogParser:
         ws.title = "Attack Report"
 
         ws.append(self.headers)
+        print("")
         for ip, data in tqdm(
             attacks.items(), desc="Exporting attacks to Excel", unit="row"
         ):
@@ -339,12 +342,14 @@ class AuthLogParser:
             command_counts[command] = len(logs)
 
         # Ajout des données des commandes et de leurs occurrences dans la feuille
+        print("")
         for command, count in tqdm(
             logs_by_command.items(), desc="Processing commands", unit="cmd"
         ):
             unique_commands_ws.append([command, len(count), "Go to Attack Report"])
 
         # Ajout de l'hyperlien pour diriger vers la feuille "Attack Report" sur chaque ligne
+        print("")
         for row in unique_commands_ws.iter_rows(
             min_row=2, max_row=unique_commands_ws.max_row, min_col=3, max_col=3
         ):
@@ -356,6 +361,7 @@ class AuthLogParser:
         for command, logs in logs_by_command.items():
             command_ws = wb.create_sheet(title=command.capitalize())
             command_ws.append(["Date", "PID", "Log"])
+            print("")
             for log_entry in tqdm(logs, desc=f"Exporting {command} logs", unit="log"):
                 command_ws.append(log_entry)
 
@@ -431,6 +437,7 @@ class AuthLogParser:
                 writer.writerow([command.capitalize()])
                 headers = ["Date", "PID", "Log"]
                 writer.writerow(headers)
+                print("")
 
                 for log_entry in tqdm(
                     logs, desc=f"Exporting {command} logs", unit="log"

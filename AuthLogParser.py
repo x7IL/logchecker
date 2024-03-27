@@ -14,6 +14,7 @@ from openpyxl.worksheet.table import (
 from openpyxl.utils import (
     get_column_letter,
 )  # Pour obtenir la lettre de la colonne Excel par numéro
+from openpyxl.cell.cell import WriteOnlyCell
 
 
 # Classe pour analyser les journaux d'authentification
@@ -305,6 +306,31 @@ class AuthLogParser:
             ws.append(row)
 
         self.apply_table_style(ws)
+
+        # Création de la feuille pour les commandes uniques
+        unique_commands_ws = wb.create_sheet(title="Unique Commands")
+
+        # Ajout des en-têtes pour la feuille des commandes uniques
+        unique_commands_ws.append(["Command", "Occurrences", "Go to Attack Report"])
+
+        # Comptage des occurrences de chaque commande
+        command_counts = {}
+        for command, logs in logs_by_command.items():
+            command_counts[command] = len(logs)
+
+        # Ajout des données des commandes et de leurs occurrences dans la feuille
+        for command, count in command_counts.items():
+            # Ajout de la commande et du nombre d'occurrences
+            unique_commands_ws.append([command, count, "Go to Attack Report"])
+
+        # Ajout de l'hyperlien pour diriger vers la feuille "Attack Report" sur chaque ligne
+        for row in unique_commands_ws.iter_rows(
+            min_row=2, max_row=unique_commands_ws.max_row, min_col=3, max_col=3
+        ):
+            for cell in row:
+                cell.hyperlink = f"#'Attack Report'!A1"
+
+        self.apply_table_style(unique_commands_ws)
 
         for command, logs in logs_by_command.items():
             has_pid = any(pid != "N/A" for _, pid, _ in logs)

@@ -133,6 +133,9 @@ class AuthLogParser:
                 date_time = datetime.strptime(date_str, "%b %d %H:%M:%S %Y")
                 date_time_str = date_time.strftime("%Y-%m-%d %H:%M:%S")
 
+                pid_match = re.search(r"\[(\d+)\]", line)
+                pid = pid_match.group(1) if pid_match else "N/A"
+
                 ip_match = re.search(r"from (\d+\.\d+\.\d+\.\d+)", line)
                 if ip_match:
                     self.process_sshd_line(ip_match, line, date_time, attacks)
@@ -142,7 +145,7 @@ class AuthLogParser:
                     command = command_match.group(1)
                     if command not in logs_by_command:
                         logs_by_command[command] = []
-                    logs_by_command[command].append((date_time_str, line.strip()))
+                    logs_by_command[command].append((date_time_str, pid, line.strip()))
 
         return attacks, logs_by_command
 
@@ -267,10 +270,18 @@ class AuthLogParser:
         self.apply_table_style(ws)
 
         for command, logs in logs_by_command.items():
+            has_pid = any(pid != "N/A" for _, pid, _ in logs)
             command_ws = wb.create_sheet(title=command.capitalize())
-            command_ws.append(["Date", "Log"])
+            headers = ["Date", "PID", "Log"] if has_pid else ["Date", "Log"]
+            command_ws.append(headers)
             for log_entry in logs:
-                command_ws.append(log_entry)
+                if has_pid:
+                    # Append the entire log entry as a single list when PID is included
+                    command_ws.append(log_entry)
+                else:
+                    # When PID is not included, create and append a list from relevant parts of the log entry
+                    command_ws.append([log_entry[0], log_entry[2]])  # Corrected here
+
             self.apply_table_style(command_ws)
 
         wb.save(filename=file_name)

@@ -1,37 +1,26 @@
-import os  # Pour les fonctionnalités du système d'exploitation
-import re  # Pour les expressions régulières
-import csv  # Pour la manipulation des fichiers CSV
-import sys  # Pour les fonctionnalités système
-import asyncio  # Pour la programmation asynchrone
-import aiohttp  # Pour les requêtes HTTP asynchrones
-import socket  # Pour les opérations réseau
-from datetime import datetime  # Pour manipuler les dates et heures
-from openpyxl import Workbook  # Pour créer des fichiers Excel
-from openpyxl.worksheet.table import (
-    Table,
-    TableStyleInfo,
-)  # Pour créer des tableaux dans Excel
-from openpyxl.utils import (
-    get_column_letter,
-)  # Pour obtenir la lettre de la colonne Excel par numéro
+import os
+import re
+import csv
+import sys
+import asyncio
+import aiohttp
+import socket
+from datetime import datetime
+from openpyxl import Workbook
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.utils import get_column_letter
 
 
-# Classe pour analyser les journaux d'authentification
 class AuthLogParser:
     def __init__(self, log_file):
-        # Initialisation avec le fichier de journal
         self.log_file = log_file
-        # Cache pour les noms de domaine associés aux adresses IP
         self.domain_name_cache = {}
-        # Cache pour les informations de géolocalisation associées aux adresses IP
         self.geolocation_cache = {}
-        # Réseaux locaux connus
         self.local_networks = [
             ("10.0.0.0", "10.255.255.255"),
             ("172.16.0.0", "172.31.255.255"),
             ("192.168.0.0", "192.168.255.255"),
         ]
-        # En-têtes pour les données d'attaque
         self.headers = [
             "IP Address",
             "Domain Name",
@@ -54,17 +43,10 @@ class AuthLogParser:
             "Ports",
             "Success Details",
         ]
-        # Seuil pour déterminer si une activité est malveillante
         self.malicious_threshold = 5
-        # Taille du lot pour la résolution asynchrone des adresses IP
         self.batch_size = 100
-        # Temps d'attente pour les requêtes réseau
         self.timeout = 5
 
-        # Étiquette pour les activités non sûres
-        self.Not_sure = "Not Sure"
-
-    # Vérifie si une adresse IP est locale
     def is_local_ip(self, ip_address):
         ip_int = self.ip_to_int(ip_address)
         return any(
@@ -72,7 +54,6 @@ class AuthLogParser:
             for start, end in self.local_networks
         )
 
-    # Convertit une adresse IP en entier
     def ip_to_int(self, ip):
         parts = ip.split(".")
         return (
@@ -82,13 +63,10 @@ class AuthLogParser:
             | int(parts[3])
         )
 
-    # Résolution asynchrone du nom de domaine associé à une adresse IP
     async def get_domain_name(self, ip_address):
-        # Vérifie si l'adresse IP est déjà en cache ou si elle est locale
         if ip_address in self.domain_name_cache or self.is_local_ip(ip_address):
             return
         try:
-            # Résolution du nom de domaine avec un délai d'attente
             hostname, _, _ = await asyncio.wait_for(
                 asyncio.get_event_loop().run_in_executor(
                     None, socket.gethostbyaddr, ip_address
@@ -97,21 +75,16 @@ class AuthLogParser:
             )
             self.domain_name_cache[ip_address] = hostname
         except Exception:
-            # En cas d'erreur, marquer comme non disponible
             self.domain_name_cache[ip_address] = "N/A"
 
-    # Résolution asynchrone de la géolocalisation associée à une adresse IP
     async def geolocate_ip(self, ip_address, session):
-        # Vérifie si les informations de géolocalisation sont déjà en cache ou si l'adresse IP est locale
         if ip_address in self.geolocation_cache or self.is_local_ip(ip_address):
             return
         try:
-            # Requête HTTP asynchrone pour obtenir les données de géolocalisation avec un délai d'attente
             async with session.get(
                 f"https://ipinfo.io/{ip_address}/json", timeout=self.timeout
             ) as response:
                 data = await response.json()
-                # Enregistrement des informations de géolocalisation
                 self.geolocation_cache[ip_address] = {
                     "country": data.get("country", "N/A"),
                     "region": data.get("region", "N/A"),
@@ -122,7 +95,6 @@ class AuthLogParser:
                     "timezone": data.get("timezone", "N/A"),
                 }
         except Exception as e:
-            # En cas d'erreur, marquer comme non disponible avec le message d'erreur
             self.geolocation_cache[ip_address] = {
                 "country": "N/A",
                 "region": "N/A",
@@ -134,11 +106,9 @@ class AuthLogParser:
                 "error": str(e),
             }
 
-    # Résolution asynchrone des adresses IP en lots
     async def resolve_addresses_batched(self, ip_addresses):
         async with aiohttp.ClientSession() as session:
             tasks = []
-            # Création des tâches pour la résolution des adresses IP
             for ip_address in ip_addresses:
                 if ip_address not in self.domain_name_cache and not self.is_local_ip(
                     ip_address
@@ -148,10 +118,8 @@ class AuthLogParser:
                     ip_address
                 ):
                     tasks.append(self.geolocate_ip(ip_address, session))
-            # Exécution asynchrone des tâches
             await asyncio.gather(*tasks)
 
-    # Analyse du journal d'authentification pour les attaques et les commandes
     def parse_auth_log(self):
         attacks, logs_by_command = {}, {}
         current_year = datetime.now().year
@@ -182,7 +150,6 @@ class AuthLogParser:
 
         return attacks, logs_by_command
 
-    # Traitement d'une ligne du journal SSH
     def process_sshd_line(self, ip_match, line, date_time, attacks):
         ip = ip_match.group(1)
         port_match = re.search(r"port (\d+)", line)
@@ -226,8 +193,6 @@ class AuthLogParser:
             )
             attacks[ip]["success_details"].append(connection_detail)
 
-        # Appliquer le style de tableau à une feuille Excel
-
     def apply_table_style(self, sheet):
         table_name = f"{sheet.title.replace(' ', '_')}Table"
         table_ref = f"A1:{get_column_letter(sheet.max_column)}{sheet.max_row}"
@@ -242,7 +207,6 @@ class AuthLogParser:
         tab.tableStyleInfo = style
         sheet.add_table(tab)
 
-    # Exporter les données vers un fichier Excel
     def export_to_excel(self, attacks, logs_by_command, file_name):
         wb = Workbook()
         ws = wb.active
@@ -274,10 +238,10 @@ class AuthLogParser:
             if data["success"] > data["fail"]:
                 malicious_label = "No"
             elif data["fail"] == 0 or total_attempts < self.malicious_threshold:
-                malicious_label = self.Not_sure
+                malicious_label = "Not Sure"
             else:
                 malicious_label = (
-                    "Yes" if data["fail"] / total_attempts > 0.9 else self.Not_sure
+                    "Yes" if data["fail"] / total_attempts > 0.9 else "Not Sure"
                 )
 
             row = [
@@ -313,19 +277,21 @@ class AuthLogParser:
             command_ws.append(headers)
             for log_entry in logs:
                 if has_pid:
+                    # Append the entire log entry as a single list when PID is included
                     command_ws.append(log_entry)
                 else:
-                    command_ws.append([log_entry[0], log_entry[2]])
+                    # When PID is not included, create and append a list from relevant parts of the log entry
+                    command_ws.append([log_entry[0], log_entry[2]])  # Corrected here
 
             self.apply_table_style(command_ws)
 
         wb.save(filename=file_name)
 
-    # Exporter les données vers un fichier CSV
     def export_to_csv(self, attacks, logs_by_command, file_name):
         with open(file_name, "w", newline="") as csvfile:
             writer = csv.writer(csvfile)
 
+            # Write Attack Report
             writer.writerow(self.headers)
             for ip, data in attacks.items():
                 domain_name = self.domain_name_cache.get(ip, "N/A")
@@ -352,10 +318,10 @@ class AuthLogParser:
                 if data["success"] > data["fail"]:
                     malicious_label = "No"
                 elif data["fail"] == 0 or total_attempts < self.malicious_threshold:
-                    malicious_label = self.Not_sure
+                    malicious_label = "Not Sure"
                 else:
                     malicious_label = (
-                        "Yes" if data["fail"] / total_attempts > 0.9 else self.Not_sure
+                        "Yes" if data["fail"] / total_attempts > 0.9 else "Not Sure"
                     )
 
                 row = [
@@ -382,9 +348,12 @@ class AuthLogParser:
                 ]
                 writer.writerow(row)
 
+            # Write each command log
             for command, logs in logs_by_command.items():
                 has_pid = any(pid != "N/A" for _, pid, _ in logs)
-                writer.writerow([])
+                writer.writerow(
+                    []
+                )  # Empty line as separator between logs of different commands
                 writer.writerow([command.capitalize()])
                 headers = ["Date", "PID", "Log"] if has_pid else ["Date", "Log"]
                 writer.writerow(headers)
@@ -396,33 +365,33 @@ class AuthLogParser:
 
 
 if __name__ == "__main__":
-    # Vérifie si un argument de fichier journal est fourni
+    # Check if log file argument is provided
     if len(sys.argv) < 2:
         print("Usage: python3 script.py <log_file>")
         sys.exit(1)
 
-    # Récupère le chemin du fichier journal à partir des arguments
+    # Extract log file path from arguments
     log_file_arg = sys.argv[1]
 
-    # Crée une instance de AuthLogParser
+    # Create AuthLogParser instance
     parser = AuthLogParser(log_file_arg)
 
-    # Analyse le fichier journal pour les attaques et les commandes
+    # Parse log file for attack and command data
     attacks_data, logs_by_command = parser.parse_auth_log()
 
-    # Résout les adresses IP pour enrichir les données d'attaque
+    # Resolve IP addresses to enrich attack data
     asyncio.run(parser.resolve_addresses_batched(list(attacks_data.keys())))
 
-    # Détermine le format du fichier de sortie (CSV/Excel) en fonction de l'option de l'utilisateur
+    # Determine output file format (CSV/Excel) based on user option
     output_folder = "reports"
-    os.makedirs(output_folder, exist_ok=True)  # Crée le dossier s'il n'existe pas
+    os.makedirs(output_folder, exist_ok=True)  # Create folder if it doesn't exist
 
     if len(sys.argv) > 2 and sys.argv[2].lower() == "-csv":
         for command, logs in logs_by_command.items():
             output_file_name = f"{output_folder}/attacks_report_{command}.csv"
             parser.export_to_csv(attacks_data, {command: logs}, output_file_name)
-            print(f"Rapport CSV enregistré sous {output_file_name}.")
+            print(f"CSV report saved to {output_file_name}.")
     else:
         output_file_name = f"{output_folder}/attacks_report.xlsx"
         parser.export_to_excel(attacks_data, logs_by_command, output_file_name)
-        print(f"Rapport Excel enregistré sous {output_file_name}.")
+        print(f"Excel report saved to {output_file_name}.")

@@ -9,3 +9,4 @@ include/
 bin/
 attacks_report.xlsx
 pyvenv.cfg
+/reports/*

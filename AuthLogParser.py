@@ -174,7 +174,10 @@ class AuthLogParser:
                 if ip_match:
                     self.process_sshd_line(ip_match, line, date_time, attacks)
 
-                command_match = re.search(r"app-1 (\w+)", line)
+                command_match = re.search(
+                    r"^\w{3} \d{1,2} \d{2}:\d{2}:\d{2} \w+ (\w+)", line
+                )
+
                 if command_match:
                     command = command_match.group(1)
                     if command not in logs_by_command:
@@ -204,6 +207,7 @@ class AuthLogParser:
                 "end": [date_time],
                 "success": 0,
                 "fail": 0,
+                "key_auth": 0,  # Ajout pour les authentifications par clé
                 "users": set(),
                 "invalid_users": set(),
                 "ports": set(),
@@ -218,16 +222,17 @@ class AuthLogParser:
         if invalid_user_match:
             attacks[ip]["invalid_users"].add(user)
 
+        # Traitement des différentes lignes en fonction du type de connexion
         if "Failed password" in line:
             attacks[ip]["fail"] += 1
-        elif "Accepted password" in line:
+        elif "Accepted password" in line or "Accepted publickey" in line:
             attacks[ip]["success"] += 1
+            if "Accepted publickey" in line:
+                attacks[ip]["key_auth"] += 1  # Compter les authentifications par clé
             connection_detail = (
                 f"{date_time.strftime('%Y-%m-%d %H:%M:%S')}, Port: {port}, User: {user}"
             )
             attacks[ip]["success_details"].append(connection_detail)
-
-        # Appliquer le style de tableau à une feuille Excel
 
     def apply_table_style(self, sheet):
         table_name = f"{sheet.title.replace(' ', '_')}Table"

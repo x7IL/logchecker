@@ -11,4 +11,4 @@
 - [x] Each executed command has its own sheet
 - [x] Convert to CSV with options
 - [] Check who executed such commands with respect to the execution date and the start/end of connections
-- [] Add a sheet that lists all the commands and when one presses on the command it sends us to the sheet
+- [x] Add a sheet that lists all the commands and when one presses on the command it sends us to the sheet
